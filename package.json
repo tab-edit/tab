@@ -8,7 +8,9 @@
   "main": "src/index.ts",
   "scripts": {
     "type-check": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "demo": "vite demo",
+    "demo:build": "vite build demo"
   },
   "dependencies": {
     "@codemirror/language": "^6.10.0",
@@ -23,8 +25,10 @@
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.15.30",
+    "codemirror": "^6.0.2",
     "jest": "^29.7.0",
     "ts-jest": "^29.3.4",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vite": "^8.1.3"
   }
 }

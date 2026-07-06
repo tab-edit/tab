@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tab-edit demo</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>tab-edit</h1>
+      <div class="actions">
+        <button id="export-xml">Export MusicXML</button>
+        <button id="export-midi">Export MIDI</button>
+      </div>
+    </header>
+    <main class="layout">
+      <section id="editor" class="pane editor-pane"></section>
+      <aside class="side-panes">
+        <section class="pane">
+          <h2>AST</h2>
+          <div id="ast" class="pane-body ast-body"></div>
+        </section>
+        <section class="pane">
+          <h2>Diagnostics</h2>
+          <div id="diagnostics" class="pane-body diagnostics-body"></div>
+        </section>
+      </aside>
+    </main>
+    <footer class="hint">
+      Tip: try replacing the doc with <code>e|--3--|\n|-----|\n</code> — implicit
+      line names trigger a fixable warning (click the fix button in Diagnostics).
+    </footer>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
