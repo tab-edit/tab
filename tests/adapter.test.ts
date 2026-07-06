@@ -7,6 +7,7 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { measureNumber, noteSound } from "@tab-edit/plugins";
 import {
+  computeActivity,
   midiFile,
   midiOfSelection,
   musicXml,
@@ -112,6 +113,40 @@ test("lint with fixes: diagnostics surface as actions; applying the edits clears
   expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
   expect(s2.doc.toString()).toMatch(/^e\|--3--\|\n[A-Za-z]\|-----\|\n$/);
   expect(tabDiagnostics(s2)).toEqual([]);
+});
+
+test("computeActivity: work is attributed to the edited segment; carried segments report NONE", () => {
+  // Unique doc so equality against artifacts from other tests can't blur
+  // the statuses (the module-level host is shared, like in a real app).
+  const doc = `Title: Activity Probe\n\n${DOC}`;
+  const s1 = stateOf(doc);
+  tabDiagnostics(s1); // pull → computes happen here
+  const first = computeActivity(s1)!;
+  expect(first).not.toBeNull();
+  // Fresh content: no segment can be identity-carried, and work happened.
+  expect(first.segments.length).toBeGreaterThanOrEqual(3);
+  expect(first.segments.every((s) => s.artifact !== "identity")).toBe(true);
+  expect(first.totalRecomputes).toBeGreaterThan(0);
+
+  // Edit DEEP in the LAST section, then pull the same reads again.
+  const editAt = doc.length - 100;
+  const s2 = s1.update({ changes: { from: editAt, to: editAt + 1, insert: "5" } }).state;
+  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  tabDiagnostics(s2);
+  const report = computeActivity(s2)!;
+
+  const untouched = report.segments.slice(0, -1);
+  const edited = report.segments[report.segments.length - 1];
+  // Untouched segments: artifacts carried BY IDENTITY, zero compute runs.
+  for (const s of untouched) {
+    expect(s.artifact).toBe("identity");
+    expect(s.recomputes.size).toBe(0);
+  }
+  // The edited segment re-parsed with new content and its props re-ran.
+  expect(edited.artifact).toBe("new");
+  let runs = 0;
+  for (const n of edited.recomputes.values()) runs += n;
+  expect(runs).toBeGreaterThan(0);
 });
 
 test("invalid content inside music surfaces as ERROR diagnostics in the editor", () => {

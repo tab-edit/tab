@@ -34,7 +34,15 @@ export function tablature(options: TablatureOptions = {}): Extension {
 }
 
 export { tabLanguage, tabTree } from "./language.js";
-export { configureTabHost, corePlugins, readTabProp, runTabCommand, tabStateDiagnostics } from "./state-layer.js";
+export {
+  computeActivity,
+  configureTabHost,
+  corePlugins,
+  readTabProp,
+  runTabCommand,
+  tabStateDiagnostics,
+} from "./state-layer.js";
+export type { ComputeReport, SegmentActivity } from "./state-layer.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
 export { importMusicXml, midiFile, musicXml } from "./export.js";
