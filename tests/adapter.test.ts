@@ -114,6 +114,17 @@ test("lint with fixes: diagnostics surface as actions; applying the edits clears
   expect(tabDiagnostics(s2)).toEqual([]);
 });
 
+test("invalid content inside music surfaces as ERROR diagnostics in the editor", () => {
+  const doc = "e|--1--2--|--3--|\nB|--@#$%--|--4--|\nG|--0--0--|--0--|\n";
+  const state = stateOf(doc);
+  const errors = tabDiagnostics(state).filter((d) => d.source === "invalid-syntax");
+  expect(errors.length).toBeGreaterThan(0);
+  for (const e of errors) expect(e.severity).toBe("error");
+  // Anchored to the unreadable text, not the whole block.
+  const garbage = { from: doc.indexOf("@"), to: doc.indexOf("%") + 1 };
+  expect(errors.some((e) => e.from < garbage.to && e.to > garbage.from)).toBe(true);
+});
+
 test("column selection → nodes → MIDI of selection (§7.4 #6 in the editor)", () => {
   const line = DOC.indexOf("\n") + 1;
   // Rectangle over columns [4,9) on all six lines of section 1.
