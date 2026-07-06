@@ -34,7 +34,9 @@ npm install                      # refresh COPIED @tab-edit/{ast,plugins,parse}
 
 ```
 src/language.ts     CmTabParser + tabLanguage + tabTree(state)  [wiring 2 core]
-src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics
+src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
+                    computeActivity (per-segment reuse status + compute-RUN
+                    counts — the perf-diagnosis surface; call AFTER reads)
 src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply = dispatch edits)
 src/selection.ts    selectedNodes (column selections!), midiOfSelection
 src/export.ts       musicXml(state), midiFile(state), importMusicXml(state, xml)

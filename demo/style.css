@@ -157,6 +157,11 @@ button:hover {
   padding: 6px 4px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.diag-row:hover {
+  background: var(--hover, rgba(128, 128, 128, 0.12));
 }
 
 .diag-dot {
@@ -199,3 +204,41 @@ button:hover {
 .hint code {
   color: var(--text);
 }
+
+/* ——— Activity pane + editor flash (computation observability) ——— */
+
+.pane-sub {
+  font-size: 10px;
+  font-weight: normal;
+  opacity: 0.6;
+  margin-left: 6px;
+}
+
+.activity-summary {
+  padding: 6px 4px;
+  font-size: 11px;
+  opacity: 0.8;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-row {
+  padding: 4px;
+  font-family: monospace;
+  font-size: 11px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+
+.activity-row:hover {
+  background: var(--hover, rgba(128, 128, 128, 0.12));
+}
+
+.activity-carried { opacity: 0.45; }
+.activity-new { border-left-color: #e05555; }
+.activity-equal { border-left-color: #e0a030; }
+.activity-state { border-left-color: #4a90d9; }
+.activity-doc { border-left-color: #9b59b6; opacity: 0.8; }
+
+.flash-new { background: rgba(224, 85, 85, 0.22); }
+.flash-equal { background: rgba(224, 160, 48, 0.22); }
+.flash-state { background: rgba(74, 144, 217, 0.2); }
