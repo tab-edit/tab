@@ -38,11 +38,18 @@ export {
   computeActivity,
   configureTabHost,
   corePlugins,
+  inspectNode,
   readTabProp,
   runTabCommand,
   tabStateDiagnostics,
 } from "./state-layer.js";
-export type { ComputeReport, SegmentActivity } from "./state-layer.js";
+export type {
+  ComputeReport,
+  NodeInspection,
+  PropInspection,
+  SegmentActivity,
+  TraceStep,
+} from "./state-layer.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
 export { importMusicXml, midiFile, musicXml } from "./export.js";

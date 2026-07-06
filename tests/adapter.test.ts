@@ -8,6 +8,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { measureNumber, noteSound } from "@tab-edit/plugins";
 import {
   computeActivity,
+  inspectNode,
   midiFile,
   midiOfSelection,
   musicXml,
@@ -147,6 +148,33 @@ test("computeActivity: work is attributed to the edited segment; carried segment
   let runs = 0;
   for (const n of edited.recomputes.values()) runs += n;
   expect(runs).toBeGreaterThan(0);
+});
+
+test("inspectNode: values + declared chain + ACTUAL evaluation trace, cache visible", () => {
+  const state = stateOf("Title: Inspect Me\n\ne|--3--5--|\nB|1--------|\n");
+  const block = tabTree(state)!
+    .topNode.getChildren("Section")
+    .flatMap((s) => s.getChildren("Block"))
+    .find((b) => b.getChildren("Measure").length > 0)!;
+
+  const first = inspectNode(state, block)!;
+  const kind = first.props.find((p) => p.id === "core-taxonomy/blockKind")!;
+  expect(kind.value).toBe("music");
+  expect(kind.chain[kind.chain.length - 1]).toBe("core-taxonomy (base)");
+  // First read actually COMPUTED.
+  expect(kind.computed).toBe(true);
+  // Claims carry provenance the UI can badge.
+  const claim = first.props.find((p) => p.id === "core-taxonomy/blockKindClaim")!;
+  expect(claim.value).toMatchObject({ value: "music", source: "core-taxonomy" });
+
+  // Same read again: served from CACHE — computed:false is the visibility.
+  const second = inspectNode(state, block)!;
+  expect(second.props.find((p) => p.id === "core-taxonomy/blockKind")!.computed).toBe(false);
+
+  // Deferred evaluation lists the prop without computing it.
+  const deferred = inspectNode(state, tabTree(state)!.topNode, false)!;
+  expect(deferred.props.length).toBeGreaterThan(0);
+  expect(deferred.props.every((p) => !p.evaluated)).toBe(true);
 });
 
 test("invalid content inside music surfaces as ERROR diagnostics in the editor", () => {

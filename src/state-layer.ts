@@ -10,6 +10,7 @@ import {
   PropRegistry,
   StateLayer,
   TabTree,
+  withChainTrace,
 } from "@tab-edit/ast";
 import type {
   Diagnostic,
@@ -80,6 +81,35 @@ export interface ComputeReport {
   readonly totalRecomputes: number;
   /** Runs on artifacts that left the tree before this report. */
   readonly unattributed: number;
+}
+
+/** One link of who actually RAN for an evaluation (chain trace). */
+export interface TraceStep {
+  readonly pluginId: string;
+  readonly delegated?: boolean;
+  readonly foundation?: boolean;
+  readonly base?: boolean;
+}
+
+export interface PropInspection {
+  readonly id: string;
+  /** Declared chain, outermost first — who COULD shape the value. */
+  readonly chain: readonly string[];
+  readonly evaluated: boolean;
+  readonly value?: unknown;
+  readonly error?: string;
+  /** Did THIS read run compute, or was it served from cache (carried or
+   *  already computed this pass)? The cache visibility is the point. */
+  readonly computed: boolean;
+  /** Who actually ran, for CHAINED props (plain props emit no trace). */
+  readonly trace: readonly TraceStep[];
+}
+
+export interface NodeInspection {
+  readonly nodeName: string;
+  readonly props: readonly PropInspection[];
+  /** Install advisories (PropRegistry.warnings) — host-visible, never errors. */
+  readonly installWarnings: readonly string[];
 }
 
 /** Module-level host (v1: one instance per process, like the language).
@@ -181,6 +211,74 @@ class TabHost {
     return { segments, docRecomputes, totalRecomputes: total, unattributed };
   }
 
+  /** Debug/inspector surface: every non-internal prop attaching to `node`,
+   *  with declared chain (explain), value, and the ACTUAL evaluation trace
+   *  (withChainTrace — empty when the read was served from cache).
+   *  `evaluate: false` (or an id allowlist) defers heavy props to a click. */
+  inspect(
+    state: EditorState,
+    node: TabNode,
+    evaluate: boolean | readonly string[] = true
+  ): NodeInspection | null {
+    if (!this.sync(state)) return null;
+    const registry = this.layer.registry;
+    // Compute-run detection for PLAIN props: only the CURRENT pass's log
+    // can grow between the two samples, so a count delta over the whole
+    // retained window means THIS read actually ran compute (chained props
+    // additionally get the richer trace).
+    const runsNow = (propId: string): number =>
+      this.layer.changesSince({ id: 0 }).changed.get(propId)?.length ?? 0;
+    const props: PropInspection[] = [];
+    for (const prop of registry.props) {
+      if (prop.internal) continue;
+      if (!prop.selectors.some((sel) => node.type.is(sel))) continue;
+      const chain = registry.explain(prop.id);
+      const wanted = evaluate === true || (evaluate !== false && evaluate.includes(prop.id));
+      if (!wanted) {
+        props.push({ id: prop.id, chain, evaluated: false, computed: false, trace: [] });
+        continue;
+      }
+      const runsBefore = runsNow(prop.id);
+      try {
+        const { value, records } = withChainTrace(() => this.layer.read(prop.handle, node));
+        const record = [...records].reverse().find((r) => r.propId === prop.id);
+        const trace: TraceStep[] = (record?.events ?? []).map((e) =>
+          e.kind === "base"
+            ? { pluginId: e.pluginId, base: true }
+            : {
+                pluginId: e.pluginId,
+                delegated: e.delegated,
+                ...(e.foundation ? { foundation: true as const } : {}),
+              }
+        );
+        props.push({
+          id: prop.id,
+          chain,
+          evaluated: true,
+          value,
+          computed: runsNow(prop.id) > runsBefore,
+          trace,
+        });
+      } catch (e) {
+        props.push({
+          id: prop.id,
+          chain,
+          evaluated: true,
+          error: (e as Error).message,
+          computed: runsNow(prop.id) > runsBefore,
+          trace: [],
+        });
+      }
+    }
+    return {
+      nodeName: node.name,
+      props,
+      installWarnings: this.layer.registry.warnings.map(
+        (w) => `${w.kind}: ${w.pluginId} → ${w.targetPropId}`
+      ),
+    };
+  }
+
   read<T>(state: EditorState, handle: PropHandle<T>, node: TabNode): T {
     if (!this.sync(state)) {
       throw new Error("tab-edit: no TabTree yet — ensure the syntax tree is parsed first");
@@ -216,6 +314,17 @@ export function readTabProp<T>(state: EditorState, handle: PropHandle<T>, node: 
 /** All current diagnostics from diagnostic props (lint feeds on this). */
 export function tabStateDiagnostics(state: EditorState): readonly Diagnostic[] {
   return host.diagnostics(state);
+}
+
+/** Inspect a node: every prop that attaches to it, with declared chain,
+ *  value, and the actual evaluation trace (empty = cache-served). Pass
+ *  `evaluate: false` or an id allowlist to defer heavy props. */
+export function inspectNode(
+  state: EditorState,
+  node: TabNode,
+  evaluate: boolean | readonly string[] = true
+): NodeInspection | null {
+  return host.inspect(state, node, evaluate);
 }
 
 /** What computation ACTUALLY ran since the previous call: per-segment
