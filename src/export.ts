@@ -5,7 +5,7 @@
 import type { EditorState } from "@codemirror/state";
 import { documentMidi, documentXml, encodeSmf, tempo } from "@tab-edit/plugins";
 import { tabTree } from "./language.js";
-import { readTabProp } from "./state-layer.js";
+import { readTabProp, runTabCommand } from "./state-layer.js";
 
 /** MusicXML 4.0 (open in MuseScore — it renders the TAB staff and plays). */
 export function musicXml(state: EditorState): string {
@@ -25,4 +25,11 @@ export function midiFile(state: EditorState): Uint8Array {
     ) ?? sections[0];
   const bpm = firstMusic ? readTabProp(state, tempo, firstMusic).bpm : 120;
   return encodeSmf(readTabProp(state, documentMidi, tree.topNode), { bpm });
+}
+
+/** Import a MusicXML document: returns the TextEdits appending its tab
+ *  rendering (ADR-002 §9 producer; EXACT round trip with musicXml()).
+ *  Apply with `view.dispatch({ changes: edits.map(e => ({...e})) })`. */
+export function importMusicXml(state: EditorState, xml: string) {
+  return runTabCommand(state, "musicxml-import.import", { xml });
 }

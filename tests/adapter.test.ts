@@ -151,3 +151,29 @@ test("live exports from the editor state: MusicXML + playable SMF", () => {
   const tempoAt = bytes.findIndex((b, i) => b === 0xff && bytes[i + 1] === 0x51);
   expect(bytes.slice(tempoAt + 3, tempoAt + 6)).toEqual([0x0a, 0x2c, 0x2b]);
 });
+
+test("MusicXML import command in the editor: musicXml → importMusicXml → the music round-trips", () => {
+  const { importMusicXml } = require("../src/index.js") as typeof import("../src/index.js");
+  const s1 = stateOf(DOC);
+  const xml = musicXml(s1);
+  const edits = importMusicXml(s1, xml);
+  const s2 = s1.update({ changes: edits.map((e) => ({ ...e })) }).state;
+  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  const sections = tabTree(s2)!.topNode.getChildren("Section");
+  // 2 source sections + 2 imported single-measure systems.
+  expect(sections.length).toBe(4);
+  // Same pitches in source measure 1 and its imported counterpart.
+  const midisOf = (section: (typeof sections)[0]) =>
+    section
+      .getChildren("Block")[0]
+      .getChildren("Measure")[0]
+      .getChildren("Sound")
+      .flatMap((s) =>
+        s.getChildren("Note").map((n) => {
+          const v = readTabProp(s2, noteSound, n);
+          return v.kind === "pitched" ? (v as { midi: number }).midi : -1;
+        })
+      )
+      .sort((a, b) => a - b);
+  expect(midisOf(sections[2])).toEqual(midisOf(sections[0]));
+});

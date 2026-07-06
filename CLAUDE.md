@@ -37,7 +37,7 @@ src/language.ts     CmTabParser + tabLanguage + tabTree(state)  [wiring 2 core]
 src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics
 src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply = dispatch edits)
 src/selection.ts    selectedNodes (column selections!), midiOfSelection
-src/export.ts       musicXml(state), midiFile(state)
+src/export.ts       musicXml(state), midiFile(state), importMusicXml(state, xml)
 src/decorations.ts  chord highlighter (sound under cursor, all its lines)
 src/index.ts        tablature() — the whole system as one extension
 tests/adapter.test.ts  E2E on real CM machinery

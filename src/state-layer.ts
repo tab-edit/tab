@@ -10,13 +10,14 @@ import {
   PropRegistry,
   StateLayer,
 } from "@tab-edit/ast";
-import type { Diagnostic, PropHandle, TabNode, TabPlugin, TabTree } from "@tab-edit/ast";
+import type { Diagnostic, PropHandle, TabNode, TabPlugin, TabTree, TextEdit } from "@tab-edit/ast";
 import {
   aggregatesPlugin,
   articulationPlugin,
   geometryPlugin,
   instrumentPlugin,
   midiPlugin,
+  musicxmlImportPlugin,
   musicxmlPlugin,
   pitchPlugin,
   taxonomyPlugin,
@@ -35,6 +36,7 @@ export const corePlugins: readonly TabPlugin[] = [
   aggregatesPlugin,
   musicxmlPlugin,
   midiPlugin,
+  musicxmlImportPlugin,
 ];
 
 export interface TabHostOptions {
@@ -85,6 +87,13 @@ class TabHost {
     if (!this.sync(state)) return [];
     return this.layer.diagnostics();
   }
+
+  runCommand(state: EditorState, id: string, args: unknown): readonly TextEdit[] {
+    if (!this.sync(state)) {
+      throw new Error("tab-edit: no TabTree yet — ensure the syntax tree is parsed first");
+    }
+    return this.layer.runCommand(id, args);
+  }
 }
 
 const host = new TabHost();
@@ -102,4 +111,14 @@ export function readTabProp<T>(state: EditorState, handle: PropHandle<T>, node: 
 /** All current diagnostics from diagnostic props (lint feeds on this). */
 export function tabStateDiagnostics(state: EditorState): readonly Diagnostic[] {
   return host.diagnostics(state);
+}
+
+/** Run a producer command (ADR-002 §9); the returned edits are yours to
+ *  dispatch: `view.dispatch({ changes: edits.map(e => ({...e})) })`. */
+export function runTabCommand(
+  state: EditorState,
+  id: string,
+  args: unknown
+): readonly TextEdit[] {
+  return host.runCommand(state, id, args);
 }
