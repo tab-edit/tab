@@ -1,0 +1,30 @@
+{
+  "name": "@tab-edit/cm",
+  "version": "0.0.0",
+  "description": "CodeMirror 6 adapter for tab-edit — TabLanguage (ADR-001 Appendix A wiring 2), semantic state layer, lint with fixes, selection queries, exports",
+  "license": "ISC",
+  "author": "Stanley Ihesiulo",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/lint": "^6.8.0",
+    "@codemirror/state": "^6.4.0",
+    "@codemirror/view": "^6.26.0",
+    "@lezer/common": "^1.2.0",
+    "@tab-edit/ast": "file:../ast",
+    "@tab-edit/parse": "file:../parse",
+    "@tab-edit/plugins": "file:../plugins"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.15.30",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.3.4",
+    "typescript": "^5.8.3"
+  }
+}
