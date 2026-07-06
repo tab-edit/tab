@@ -242,3 +242,113 @@ button:hover {
 .flash-new { background: rgba(224, 85, 85, 0.22); }
 .flash-equal { background: rgba(224, 160, 48, 0.22); }
 .flash-state { background: rgba(74, 144, 217, 0.2); }
+
+/* ——— Inspector pane ——— */
+
+.inspector-node {
+  padding: 6px 4px;
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: bold;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-row {
+  padding: 4px;
+  font-family: monospace;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-prop { font-weight: bold; }
+.inspector-value { white-space: pre-wrap; word-break: break-word; }
+.inspector-error { color: #e05555; }
+
+.inspector-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+.inspector-computed { background: rgba(224, 160, 48, 0.3); }
+.inspector-cached { background: rgba(90, 180, 90, 0.25); }
+
+.inspector-trace {
+  margin-top: 2px;
+  padding-left: 10px;
+  opacity: 0.7;
+  font-size: 10px;
+}
+
+.inspector-warning {
+  padding: 4px;
+  font-size: 10px;
+  color: #e0a030;
+}
+
+.inspector-compute {
+  margin-left: 8px;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+/* ——— Activity legend ——— */
+
+.activity-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-chip {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  cursor: help;
+}
+
+.activity-chip.activity-carried { opacity: 0.6; }
+
+/* ——— Collapsible + resizable side panes ——— */
+
+.side-panes {
+  overflow-y: auto;
+}
+
+.side-panes .pane {
+  flex: 0 0 auto;
+  height: 24%;
+  min-height: 34px;
+  resize: vertical;
+  overflow: hidden;
+}
+
+.side-panes .pane > h2 {
+  cursor: pointer;
+  user-select: none;
+}
+
+.side-panes .pane > h2::before {
+  content: "▾ ";
+  font-size: 9px;
+}
+
+.side-panes .pane.collapsed {
+  height: auto !important;
+  min-height: 0;
+  resize: none;
+}
+
+.side-panes .pane.collapsed > h2::before {
+  content: "▸ ";
+}
+
+.side-panes .pane.collapsed .pane-body {
+  display: none;
+}
