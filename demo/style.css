@@ -352,3 +352,9 @@ button:hover {
 .side-panes .pane.collapsed .pane-body {
   display: none;
 }
+
+/* ——— Lint highlights (diagnostics as tints, not squiggles) ——— */
+
+.lint-hl-error { background: rgba(224, 85, 85, 0.3); }
+.lint-hl-warning { background: rgba(224, 160, 48, 0.28); }
+.lint-hl-info { background: rgba(74, 144, 217, 0.24); }

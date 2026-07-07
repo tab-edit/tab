@@ -3,7 +3,7 @@
 // through the public @tab-edit/cm surface (../src/index.ts). No src/ edits.
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
-import { lintGutter } from "@codemirror/lint";
+import { linter, lintGutter } from "@codemirror/lint";
 import { EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
@@ -11,6 +11,7 @@ import {
   inspectNode,
   midiFile,
   musicXml,
+  tabDiagnostics,
   tablature,
   tabStateDiagnostics,
   tabTree,
@@ -42,6 +43,7 @@ const ACTIVITY_EXPLAIN: Record<string, string> = {
   state: "Parse reused, but the listed prop values recomputed.",
   doc: "Document-wide folds (measure numbers, directive timeline) that recomputed.",
   summary: "One run = one prop computed for one node. Fewer runs after a small edit = better.",
+  propsSummary: "Cached = reading it did zero work; the rest computed for this inspection.",
 };
 
 // ——— Activity flash: transient background tint on segments that DID work
@@ -64,6 +66,37 @@ const flashField = StateField.define<DecorationSet>({
           e.value
             .filter((f) => f.from < f.to)
             .map((f) => flashMarks[f.kind].range(f.from, f.to)),
+          true
+        );
+      }
+    }
+    return deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// ——— Lint highlights: diagnostics render as background tints (same visual
+// language as the reparse flash), not squiggles. Persistent until the
+// diagnostics change.
+const setLintHighlights = StateEffect.define<
+  { from: number; to: number; severity: string }[]
+>();
+const lintMarks: Record<string, Decoration> = {
+  error: Decoration.mark({ class: "lint-hl-error" }),
+  warning: Decoration.mark({ class: "lint-hl-warning" }),
+  info: Decoration.mark({ class: "lint-hl-info" }),
+};
+const lintHighlightField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    deco = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setLintHighlights)) {
+        deco = Decoration.set(
+          e.value
+            .filter((d) => d.from < d.to)
+            .sort((a, b) => a.from - b.from)
+            .map((d) => (lintMarks[d.severity] ?? lintMarks.info).range(d.from, d.to)),
           true
         );
       }
@@ -104,8 +137,13 @@ const view = new EditorView({
   doc: INITIAL_DOC,
   extensions: [
     basicSetup,
-    tablature(),
+    // lint: false drops the stock squiggle underlines; the demo re-adds the
+    // lint STATE (markerFilter drops in-text marks, gutter still reads it)
+    // and shows diagnostics as background highlights instead.
+    tablature({ lint: false }),
+    linter((v) => tabDiagnostics(v.state), { markerFilter: () => [] }),
     lintGutter(),
+    lintHighlightField,
     flashField,
     EditorView.updateListener.of((update) => {
       if (update.docChanged || update.selectionSet) scheduleRefresh();
@@ -284,6 +322,9 @@ function renderInspector(tree: NonNullable<ReturnType<typeof tabTree>>): void {
   // owns the cursor. Whole-document props (exports!) defer to a click.
   let shownAny = false;
   let warnings: readonly string[] = [];
+  let cachedCount = 0;
+  let evaluatedCount = 0;
+  const groups: { header: HTMLElement; rows: HTMLElement[] }[] = [];
   for (let node: ReturnType<typeof deepestNodeAt> | null = start; node; node = node.parent) {
     const inspection = inspectNode(view.state, node, node.parent !== null);
     if (!inspection) continue;
@@ -297,9 +338,28 @@ function renderInspector(tree: NonNullable<ReturnType<typeof tabTree>>): void {
       ranges.push(`[${node.rangeFrom(i)},${node.rangeTo(i)})`);
     }
     header.textContent = `${inspection.nodeName} ${ranges.join("+")}`;
-    inspectorEl.appendChild(header);
-    for (const p of inspection.props) inspectorEl.appendChild(propRow(node, p));
+    const rows: HTMLElement[] = [];
+    for (const p of inspection.props) {
+      if (p.evaluated) {
+        evaluatedCount++;
+        if (!p.computed) cachedCount++;
+      }
+      rows.push(propRow(node, p));
+    }
+    groups.push({ header, rows });
     shownAny = true;
+  }
+
+  if (shownAny) {
+    const summary = document.createElement("div");
+    summary.className = "activity-summary";
+    summary.title = ACTIVITY_EXPLAIN.propsSummary;
+    summary.textContent = `${cachedCount}/${evaluatedCount} props served from cache`;
+    inspectorEl.appendChild(summary);
+  }
+  for (const g of groups) {
+    inspectorEl.appendChild(g.header);
+    for (const row of g.rows) inspectorEl.appendChild(row);
   }
 
   if (!shownAny) {
@@ -461,6 +521,17 @@ function renderAst(tree: NonNullable<ReturnType<typeof tabTree>>, cursorPos: num
 function renderDiagnostics(): void {
   const diags = tabStateDiagnostics(view.state);
   diagnosticsEl.innerHTML = "";
+
+  // In-text highlights (zero-width diagnostics widen to one char).
+  view.dispatch({
+    effects: setLintHighlights.of(
+      diags.map((d) => ({
+        from: d.from,
+        to: d.to > d.from ? d.to : Math.min(d.from + 1, view.state.doc.length),
+        severity: d.severity,
+      }))
+    ),
+  });
 
   if (diags.length === 0) {
     const empty = document.createElement("div");
