@@ -37,7 +37,13 @@
         </section>
         <section class="pane">
           <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
-          <div id="sheet" class="pane-body sheet-body"></div>
+          <div id="sheet" class="pane-body sheet-body">
+            <div class="sheet-controls">
+              <button id="sheet-mode">standard notation</button>
+            </div>
+            <div id="sheet-status" class="sheet-status" hidden></div>
+            <div id="sheet-score"></div>
+          </div>
         </section>
       </aside>
     </main>

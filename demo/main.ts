@@ -179,31 +179,129 @@ function pollAndRender(gen: number, attempt = 0): void {
 // ——— Live sheet music: the REAL musicXml export rendered by OSMD. The
 // per-section XML cache (§7.4) does the incremental work; this pane just
 // re-renders when the tree changes.
-const osmd = new OpenSheetMusicDisplay(sheetEl, {
-  autoResize: false,
+const sheetStatusEl = document.getElementById("sheet-status") as HTMLElement;
+const sheetScoreEl = document.getElementById("sheet-score") as HTMLElement;
+const osmd = new OpenSheetMusicDisplay(sheetScoreEl, {
+  autoResize: true, // reflow to the pane width — no horizontal clipping
   backend: "svg",
   drawTitle: true,
 });
 let sheetTree: unknown = null;
 let sheetGeneration = 0;
+let sheetLoaded = false;
+
+function sheetStatus(message: string | null): void {
+  sheetStatusEl.hidden = message === null;
+  sheetStatusEl.textContent = message ?? "";
+}
+
+type SheetMode = "tab" | "standard";
+let sheetMode: SheetMode = "tab";
+
+/** Make the export OSMD-renderable.
+ *
+ *  TAB mode: misgrouped stray lines (grammar backlog #18/#19) export
+ *  sections whose "instrument" has ONE course → <staff-lines>1</staff-lines>
+ *  (VexFlow: "Invalid number of lines: 1") — drop those measures; and
+ *  string numbers past the section's staff lines (mixed groupings) →
+ *  VexFlow "Invalid note initialization object" — drop just the technical,
+ *  the pitch still renders. Attributes persist across a section, so track
+ *  the CURRENT staff-lines while walking each part.
+ *
+ *  STANDARD mode: TAB clefs become G clefs, staff-details (tab tunings) and
+ *  technical string/fret go away — pitches are already in the export, so
+ *  what remains is ordinary notation. Percussion clefs stay. */
+function sanitizeForOsmd(xmlText: string, mode: SheetMode): { xml: string; removed: number } {
+  const dom = new DOMParser().parseFromString(xmlText, "application/xml");
+  let removed = 0;
+  if (mode === "standard") {
+    for (const clef of [...dom.querySelectorAll("clef")]) {
+      const sign = clef.querySelector("sign");
+      if (sign?.textContent === "TAB") {
+        sign.textContent = "G";
+        const line = clef.querySelector("line");
+        if (line) line.textContent = "2";
+      }
+    }
+    for (const details of [...dom.querySelectorAll("staff-details")]) details.remove();
+    for (const technical of [...dom.querySelectorAll("technical")]) technical.remove();
+  } else {
+    for (const part of [...dom.querySelectorAll("part")]) {
+      let staffLines = 5;
+      for (const measure of [...part.querySelectorAll(":scope > measure")]) {
+        const declared = measure.querySelector("staff-lines");
+        if (declared) staffLines = Number(declared.textContent);
+        if (staffLines < 2) {
+          measure.remove();
+          removed++;
+          continue;
+        }
+        for (const technical of [...measure.querySelectorAll("technical")]) {
+          const string = Number(technical.querySelector("string")?.textContent ?? "1");
+          if (!(string >= 1 && string <= staffLines)) technical.remove();
+        }
+      }
+    }
+  }
+  // Zero-length notes are undrawable (dialect gaps — e.g. RTP colon-frets —
+  // can misparse sounds onto one column); VexFlow throws on them.
+  for (const note of [...dom.querySelectorAll("note")]) {
+    if (Number(note.querySelector("duration")?.textContent ?? "1") <= 0) {
+      note.remove();
+      removed++;
+    }
+  }
+  return { xml: new XMLSerializer().serializeToString(dom), removed };
+}
 
 async function renderSheet(tree: NonNullable<ReturnType<typeof tabTree>>): Promise<void> {
   if (tree === sheetTree) return;
   sheetTree = tree;
   const gen = ++sheetGeneration;
+  const xml = musicXml(view.state);
+  computeActivity(view.state); // drain export reads out of edit attribution
   try {
-    const xml = musicXml(view.state);
-    computeActivity(view.state); // drain export reads out of edit attribution
-    await osmd.load(xml);
+    const { xml: renderable, removed } = sanitizeForOsmd(xml, sheetMode);
+    await osmd.load(renderable);
     if (gen !== sheetGeneration) return; // superseded while loading
     osmd.render();
-    sheetEl.classList.remove("sheet-failed");
+    sheetLoaded = true;
+    sheetStatus(
+      removed > 0
+        ? `${removed} measure${removed === 1 ? "" : "s"} skipped: 1-line staves from stray/misgrouped tab lines (grammar backlog)`
+        : null
+    );
   } catch (e) {
     if (gen !== sheetGeneration) return;
-    sheetEl.classList.add("sheet-failed");
-    sheetEl.textContent = `sheet rendering failed: ${(e as Error).message}`;
+    // Keep the last good score visible; report above it.
+    sheetStatus(`sheet rendering failed: ${(e as Error).message}`);
   }
 }
+
+// TAB ↔ standard notation toggle: same export, different sanitize pass.
+const sheetModeBtn = document.getElementById("sheet-mode") as HTMLButtonElement;
+sheetModeBtn.addEventListener("click", () => {
+  sheetMode = sheetMode === "tab" ? "standard" : "tab";
+  sheetModeBtn.textContent = sheetMode === "tab" ? "standard notation" : "tab notation";
+  sheetTree = null; // force a re-render of the same tree
+  const tree = tabTree(view.state);
+  if (tree) void renderSheet(tree);
+});
+
+// The pane resizes by drag (not just window resize, which OSMD watches
+// itself) — re-render to the new width, debounced, only when visible.
+let sheetResizeTimer: ReturnType<typeof setTimeout> | undefined;
+new ResizeObserver(() => {
+  if (!sheetLoaded || sheetEl.clientWidth < 60) return;
+  if (sheetResizeTimer !== undefined) clearTimeout(sheetResizeTimer);
+  sheetResizeTimer = setTimeout(() => {
+    try {
+      osmd.render();
+    } catch {
+      /* zero-width mid-drag — the next resize event re-renders */
+    }
+  }, 200);
+}).observe(sheetEl);
 
 /** Deepest node whose ranges contain `pos` (TabDocument if none). */
 function deepestNodeAt(tree: NonNullable<ReturnType<typeof tabTree>>, pos: number) {

@@ -371,9 +371,31 @@ button:hover {
   overflow: auto;
 }
 
-.sheet-body.sheet-failed {
-  background: transparent;
-  color: var(--text-dim);
-  font-style: italic;
+#sheet-score {
+  width: 100%;
+  min-width: 0;
+}
+
+.sheet-status {
+  position: sticky;
+  top: 0;
+  padding: 4px 8px;
+  background: #fff8e6;
+  color: #7a5b00;
   font-size: 11px;
+  border-bottom: 1px solid #e8d9a0;
+}
+
+.sheet-controls {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 3px 6px;
+  background: #f4f4f4;
+  border-bottom: 1px solid #ddd;
+}
+
+.sheet-controls button {
+  font-size: 10px;
+  cursor: pointer;
 }
