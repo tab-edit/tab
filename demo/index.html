@@ -10,6 +10,8 @@
     <header class="topbar">
       <h1>tab-edit</h1>
       <div class="actions">
+        <button id="import-xml">Import MusicXML</button>
+        <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
         <button id="export-xml">Export MusicXML</button>
         <button id="export-midi">Export MIDI</button>
       </div>
@@ -32,6 +34,10 @@
         <section class="pane">
           <h2>Activity <span class="pane-sub">what actually computed since the last refresh</span></h2>
           <div id="activity" class="pane-body activity-body"></div>
+        </section>
+        <section class="pane">
+          <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
+          <div id="sheet" class="pane-body sheet-body"></div>
         </section>
       </aside>
     </main>

@@ -353,8 +353,27 @@ button:hover {
   display: none;
 }
 
-/* ——— Lint highlights (diagnostics as tints, not squiggles) ——— */
+/* ——— Diagnostics as tints, not squiggles: restyle CM's own lint marks
+   so hover tooltips, fix actions, and the gutter keep working ——— */
 
-.lint-hl-error { background: rgba(224, 85, 85, 0.3); }
-.lint-hl-warning { background: rgba(224, 160, 48, 0.28); }
-.lint-hl-info { background: rgba(74, 144, 217, 0.24); }
+.cm-editor .cm-lintRange {
+  background-image: none;
+  padding-bottom: 0;
+}
+.cm-editor .cm-lintRange-error { background-color: rgba(224, 85, 85, 0.3); }
+.cm-editor .cm-lintRange-warning { background-color: rgba(224, 160, 48, 0.28); }
+.cm-editor .cm-lintRange-info { background-color: rgba(74, 144, 217, 0.24); }
+
+/* ——— Sheet pane: notation needs paper ——— */
+
+.sheet-body {
+  background: #fff;
+  overflow: auto;
+}
+
+.sheet-body.sheet-failed {
+  background: transparent;
+  color: var(--text-dim);
+  font-style: italic;
+  font-size: 11px;
+}

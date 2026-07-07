@@ -3,15 +3,16 @@
 // through the public @tab-edit/cm surface (../src/index.ts). No src/ edits.
 import { basicSetup } from "codemirror";
 import { EditorView } from "@codemirror/view";
-import { linter, lintGutter } from "@codemirror/lint";
+import { lintGutter } from "@codemirror/lint";
+import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
   computeActivity,
+  importMusicXml,
   inspectNode,
   midiFile,
   musicXml,
-  tabDiagnostics,
   tablature,
   tabStateDiagnostics,
   tabTree,
@@ -32,6 +33,7 @@ const astEl = document.getElementById("ast") as HTMLElement;
 const diagnosticsEl = document.getElementById("diagnostics") as HTMLElement;
 const activityEl = document.getElementById("activity") as HTMLElement;
 const inspectorEl = document.getElementById("inspector") as HTMLElement;
+const sheetEl = document.getElementById("sheet") as HTMLElement;
 const editorHost = document.getElementById("editor") as HTMLElement;
 
 // One-line explanations for the Activity pane (legend + row hovers).
@@ -75,36 +77,9 @@ const flashField = StateField.define<DecorationSet>({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// ——— Lint highlights: diagnostics render as background tints (same visual
-// language as the reparse flash), not squiggles. Persistent until the
-// diagnostics change.
-const setLintHighlights = StateEffect.define<
-  { from: number; to: number; severity: string }[]
->();
-const lintMarks: Record<string, Decoration> = {
-  error: Decoration.mark({ class: "lint-hl-error" }),
-  warning: Decoration.mark({ class: "lint-hl-warning" }),
-  info: Decoration.mark({ class: "lint-hl-info" }),
-};
-const lintHighlightField = StateField.define<DecorationSet>({
-  create: () => Decoration.none,
-  update(deco, tr) {
-    deco = deco.map(tr.changes);
-    for (const e of tr.effects) {
-      if (e.is(setLintHighlights)) {
-        deco = Decoration.set(
-          e.value
-            .filter((d) => d.from < d.to)
-            .sort((a, b) => a.from - b.from)
-            .map((d) => (lintMarks[d.severity] ?? lintMarks.info).range(d.from, d.to)),
-          true
-        );
-      }
-    }
-    return deco;
-  },
-  provide: (f) => EditorView.decorations.from(f),
-});
+// Diagnostics render as background tints, not squiggles — done purely in
+// CSS over CM's own .cm-lintRange marks (style.css), so hover tooltips,
+// fix actions, and the gutter all keep working.
 
 let flashClearTimer: ReturnType<typeof setTimeout> | undefined;
 function flashActivity(report: ComputeReport): void {
@@ -137,13 +112,8 @@ const view = new EditorView({
   doc: INITIAL_DOC,
   extensions: [
     basicSetup,
-    // lint: false drops the stock squiggle underlines; the demo re-adds the
-    // lint STATE (markerFilter drops in-text marks, gutter still reads it)
-    // and shows diagnostics as background highlights instead.
-    tablature({ lint: false }),
-    linter((v) => tabDiagnostics(v.state), { markerFilter: () => [] }),
+    tablature(),
     lintGutter(),
-    lintHighlightField,
     flashField,
     EditorView.updateListener.of((update) => {
       if (update.docChanged || update.selectionSet) scheduleRefresh();
@@ -202,6 +172,36 @@ function pollAndRender(gen: number, attempt = 0): void {
     note.className = "activity-summary";
     note.textContent = `+ ${inspectorCost.totalRecomputes} runs from the Inspector pane`;
     activityEl.appendChild(note);
+  }
+  void renderSheet(tree);
+}
+
+// ——— Live sheet music: the REAL musicXml export rendered by OSMD. The
+// per-section XML cache (§7.4) does the incremental work; this pane just
+// re-renders when the tree changes.
+const osmd = new OpenSheetMusicDisplay(sheetEl, {
+  autoResize: false,
+  backend: "svg",
+  drawTitle: true,
+});
+let sheetTree: unknown = null;
+let sheetGeneration = 0;
+
+async function renderSheet(tree: NonNullable<ReturnType<typeof tabTree>>): Promise<void> {
+  if (tree === sheetTree) return;
+  sheetTree = tree;
+  const gen = ++sheetGeneration;
+  try {
+    const xml = musicXml(view.state);
+    computeActivity(view.state); // drain export reads out of edit attribution
+    await osmd.load(xml);
+    if (gen !== sheetGeneration) return; // superseded while loading
+    osmd.render();
+    sheetEl.classList.remove("sheet-failed");
+  } catch (e) {
+    if (gen !== sheetGeneration) return;
+    sheetEl.classList.add("sheet-failed");
+    sheetEl.textContent = `sheet rendering failed: ${(e as Error).message}`;
   }
 }
 
@@ -381,12 +381,14 @@ function renderActivity(report: ComputeReport): void {
   const summary = document.createElement("div");
   summary.className = "activity-summary";
   summary.title = ACTIVITY_EXPLAIN.summary;
+  const n = report.segments.length;
+  const parseReused = report.segments.filter((s) => s.artifact === "identity").length;
   const carried = report.segments.filter(
     (s) => s.artifact === "identity" && s.recomputes.size === 0
   ).length;
   summary.textContent =
-    `${report.totalRecomputes} compute runs · ` +
-    `${carried}/${report.segments.length} segments fully carried` +
+    `${report.totalRecomputes} compute runs · ${parseReused}/${n} parse-reused · ` +
+    `${carried}/${n} fully carried` +
     (report.unattributed > 0 ? ` · ${report.unattributed} on evicted segments` : "");
   activityEl.appendChild(summary);
 
@@ -522,17 +524,6 @@ function renderDiagnostics(): void {
   const diags = tabStateDiagnostics(view.state);
   diagnosticsEl.innerHTML = "";
 
-  // In-text highlights (zero-width diagnostics widen to one char).
-  view.dispatch({
-    effects: setLintHighlights.of(
-      diags.map((d) => ({
-        from: d.from,
-        to: d.to > d.from ? d.to : Math.min(d.from + 1, view.state.doc.length),
-        severity: d.severity,
-      }))
-    ),
-  });
-
   if (diags.length === 0) {
     const empty = document.createElement("div");
     empty.className = "diag-empty";
@@ -589,6 +580,23 @@ function downloadBlob(data: string | Uint8Array, filename: string, mime: string)
   a.click();
   URL.revokeObjectURL(url);
 }
+
+// Import: pick a .musicxml file → the §9 producer computes TextEdits from
+// the CURRENT state → dispatching them is one undoable transaction.
+const importFileInput = document.getElementById("import-xml-file") as HTMLInputElement;
+document.getElementById("import-xml")!.addEventListener("click", () => importFileInput.click());
+importFileInput.addEventListener("change", async () => {
+  const file = importFileInput.files?.[0];
+  importFileInput.value = ""; // allow re-picking the same file
+  if (!file) return;
+  try {
+    const edits = importMusicXml(view.state, await file.text());
+    view.dispatch({ changes: edits.map((e) => ({ ...e })) });
+    view.focus();
+  } catch (e) {
+    alert(`MusicXML import failed: ${(e as Error).message}`);
+  }
+});
 
 document.getElementById("export-xml")!.addEventListener("click", () => {
   downloadBlob(musicXml(view.state), "tab.musicxml", "application/vnd.recordare.musicxml+xml");
