@@ -2,10 +2,10 @@
 // live panes — the semantic AST and diagnostics-with-fixes — driven purely
 // through the public @tab-edit/cm surface (../src/index.ts). No src/ edits.
 import { basicSetup } from "codemirror";
-import { EditorView } from "@codemirror/view";
+import { EditorView, rectangularSelection } from "@codemirror/view";
 import { lintGutter } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
-import { EditorSelection, StateEffect, StateField } from "@codemirror/state";
+import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
   computeActivity,
@@ -13,6 +13,7 @@ import {
   inspectNode,
   midiFile,
   musicXml,
+  selectionNodeHighlight,
   tablature,
   tabStateDiagnostics,
   tabTree,
@@ -108,11 +109,23 @@ let pinned: { index: number; signature: string } | null = null;
 const rangeSignature = (ranges: readonly { from: number; to: number }[]): string =>
   ranges.map((r) => `${r.from}-${r.to}`).join(",");
 
+// Column selection and selection-highlighting are toggled live from the
+// topbar checkboxes; each rides its own Compartment so a checkbox flip is a
+// single reconfigure transaction rather than tearing down the whole editor.
+// tablature() itself keeps its defaults off (`false`) — these compartments
+// are the ONLY source of the two behaviors here.
+const columnSelectionCompartment = new Compartment();
+const highlightSelectionCompartment = new Compartment();
+const columnSelectionExtension = rectangularSelection({ eventFilter: (e) => e.detail === 1 });
+const highlightSelectionExtension = selectionNodeHighlight();
+
 const view = new EditorView({
   doc: INITIAL_DOC,
   extensions: [
     basicSetup,
-    tablature(),
+    tablature({ columnSelection: false, highlightSelection: false }),
+    columnSelectionCompartment.of(columnSelectionExtension),
+    highlightSelectionCompartment.of(highlightSelectionExtension),
     lintGutter(),
     flashField,
     EditorView.updateListener.of((update) => {
@@ -124,6 +137,27 @@ const view = new EditorView({
 
 // Exposed for console poking and the Playwright verify loop.
 Object.assign(globalThis, { view });
+
+// Topbar toggles: column select (plain-drag rectangular selection) and
+// selection-node highlighting (Sounds + Measures the selection touches).
+const columnSelectionToggle = document.getElementById("toggle-column-selection") as HTMLInputElement;
+const highlightSelectionToggle = document.getElementById(
+  "toggle-highlight-selection"
+) as HTMLInputElement;
+columnSelectionToggle.addEventListener("change", () => {
+  view.dispatch({
+    effects: columnSelectionCompartment.reconfigure(
+      columnSelectionToggle.checked ? columnSelectionExtension : []
+    ),
+  });
+});
+highlightSelectionToggle.addEventListener("change", () => {
+  view.dispatch({
+    effects: highlightSelectionCompartment.reconfigure(
+      highlightSelectionToggle.checked ? highlightSelectionExtension : []
+    ),
+  });
+});
 
 // Side panes: header click collapses; the bottom edge drags to resize
 // (native CSS resize).

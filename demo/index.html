@@ -10,6 +10,14 @@
     <header class="topbar">
       <h1>tab-edit</h1>
       <div class="actions">
+        <label class="toggle" title="Alt+drag makes a column selection (plain-drag-always breaks double-click word-select, so it stays Alt-gated)">
+          <input id="toggle-column-selection" type="checkbox" checked />
+          column select (Alt+drag)
+        </label>
+        <label class="toggle">
+          <input id="toggle-highlight-selection" type="checkbox" checked />
+          highlight selection
+        </label>
         <button id="import-xml">Import MusicXML</button>
         <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
         <button id="export-xml">Export MusicXML</button>

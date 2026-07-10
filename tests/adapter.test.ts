@@ -13,6 +13,7 @@ import {
   midiOfSelection,
   musicXml,
   readTabProp,
+  selectedNodeHighlightRanges,
   selectedNodes,
   soundRangesAtCursor,
   tabDiagnostics,
@@ -199,6 +200,38 @@ test("column selection → nodes → MIDI of selection (§7.4 #6 in the editor)"
   expect(sounds).toHaveLength(2); // e:0@col4, e:2@col7 — B:3@col2 outside
   const values = midiOfSelection(state);
   expect(values.map((v) => v.events[0].midi)).toEqual([64, 66]);
+});
+
+test("selection highlight: column selection lights up every intersecting Sound AND Measure", () => {
+  const line = DOC.indexOf("\n") + 1;
+  // Same rectangle as the MIDI-of-selection test: columns [4,9) on all six
+  // lines of section 1 — inside the section's single Measure.
+  const selection = EditorSelection.create(
+    Array.from({ length: 6 }, (_, l) => EditorSelection.range(l * line + 4, l * line + 9))
+  );
+  const state = stateOf(DOC, selection);
+  const ranges = selectedNodeHighlightRanges(state);
+
+  const soundRanges = ranges.filter((r) => r.cls === "cm-tab-selected-sound");
+  const measureRanges = ranges.filter((r) => r.cls === "cm-tab-selected-measure");
+  expect(soundRanges.length).toBeGreaterThan(0);
+  expect(measureRanges.length).toBeGreaterThan(0);
+
+  // The two sounds in the rectangle (e:0@col4, e:2@col7) each surface, and
+  // the Measure they live in is multi-range — decorated on every one of its
+  // lines, not just the ones touched by the selection.
+  const measure = selectedNodes(state, "Measure")[0]!;
+  expect(measureRanges.length).toBe(measure.rangeCount);
+  for (let i = 0; i < measure.rangeCount; i++) {
+    expect(measureRanges.some((r) => r.from === measure.rangeFrom(i) && r.to === measure.rangeTo(i))).toBe(
+      true
+    );
+  }
+});
+
+test("selection highlight: an empty (caret) selection highlights nothing", () => {
+  const state = stateOf(DOC, EditorSelection.single(DOC.indexOf("0")));
+  expect(selectedNodeHighlightRanges(state)).toEqual([]);
 });
 
 test("chord highlight: the Sound under the cursor lights up on every line it touches", () => {

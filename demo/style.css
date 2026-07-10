@@ -66,6 +66,24 @@ button:hover {
   color: var(--accent);
 }
 
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle:hover {
+  color: var(--text);
+}
+
+.toggle input {
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
 .layout {
   flex: 1;
   display: flex;
