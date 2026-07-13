@@ -1,9 +1,17 @@
 // Demo page for the tab-edit CodeMirror 6 adapter: an editor pane plus two
 // live panes — the semantic AST and diagnostics-with-fixes — driven purely
 // through the public @tab-edit/cm surface (../src/index.ts). No src/ edits.
-import { basicSetup } from "codemirror";
-import { EditorView, rectangularSelection } from "@codemirror/view";
-import { lintGutter } from "@codemirror/lint";
+import { minimalSetup } from "codemirror";
+import {
+  EditorView,
+  crosshairCursor,
+  dropCursor,
+  keymap,
+  lineNumbers,
+  rectangularSelection,
+} from "@codemirror/view";
+import { searchKeymap } from "@codemirror/search";
+import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
@@ -122,7 +130,19 @@ const highlightSelectionExtension = selectionNodeHighlight();
 const view = new EditorView({
   doc: INITIAL_DOC,
   extensions: [
-    basicSetup,
+    // minimalSetup + only what a tab editor needs from basicSetup. Deliberately
+    // absent: highlightActiveLine/highlightActiveLineGutter (a full-width line
+    // bar misleads in a COLUMN-based notation — selectionNodeHighlight owns
+    // "where am I") and the prose extras (folding, bracket closing,
+    // autocompletion, indent-on-input).
+    minimalSetup,
+    lineNumbers(),
+    dropCursor(),
+    crosshairCursor(),
+    // NO highlightSelectionMatches: tab text is a tiny alphabet dominated
+    // by dash runs, so "similar text" floods the doc on any selection
+    // (Stan 2026-07-13). Explicit search (Cmd-F) covers the motif case.
+    keymap.of([...searchKeymap, ...lintKeymap]),
     tablature({ columnSelection: false, highlightSelection: false }),
     columnSelectionCompartment.of(columnSelectionExtension),
     highlightSelectionCompartment.of(highlightSelectionExtension),
@@ -159,10 +179,36 @@ highlightSelectionToggle.addEventListener("change", () => {
   });
 });
 
-// Side panes: header click collapses; the bottom edge drags to resize
-// (native CSS resize).
+// Side panes: header click collapses.
 for (const pane of document.querySelectorAll(".side-panes .pane")) {
   pane.querySelector("h2")?.addEventListener("click", () => pane.classList.toggle("collapsed"));
+}
+
+// Divider handles between panes — the primary resize affordance (the old
+// corner nub was undiscoverable). Dragging sets the pane ABOVE's height
+// directly; panes keep plain fixed heights otherwise (predictable beats
+// clever — leftover room below the last pane is fine).
+const sidePanes = [...document.querySelectorAll<HTMLElement>(".side-panes .pane")];
+for (const pane of sidePanes.slice(0, -1)) {
+  const divider = document.createElement("div");
+  divider.className = "pane-divider";
+  pane.after(divider);
+  divider.addEventListener("pointerdown", (down) => {
+    if (pane.classList.contains("collapsed")) return;
+    down.preventDefault();
+    divider.setPointerCapture(down.pointerId);
+    const startY = down.clientY;
+    const startHeight = pane.getBoundingClientRect().height;
+    const move = (e: PointerEvent) => {
+      pane.style.height = `${Math.max(34, startHeight + e.clientY - startY)}px`;
+    };
+    const stop = () => {
+      divider.removeEventListener("pointermove", move);
+      divider.removeEventListener("pointerup", stop);
+    };
+    divider.addEventListener("pointermove", move);
+    divider.addEventListener("pointerup", stop);
+  });
 }
 
 // Kick off the first render (the initial state hasn't gone through the
@@ -388,12 +434,19 @@ interface InspectorEntry {
 }
 interface InspectorData {
   readonly shownAny: boolean;
+  /** Is the cursor ON something musical — a props-bearing node BELOW the
+   *  block level (note/measure/sound)? Ambient block/section/document
+   *  context alone means the pane should still teach the click→values move. */
+  readonly onMusicNode: boolean;
   readonly warnings: readonly string[];
   readonly cachedCount: number;
   readonly evaluatedCount: number;
   readonly entries: readonly InspectorEntry[];
   readonly pluginOrder: readonly string[]; // first-appearance order (deepest node first)
 }
+
+const INSPECTOR_TEACH =
+  "place the cursor on a note, measure, or tab line in the editor to inspect what the plugins computed for it";
 
 let inspectorData: InspectorData | null = null;
 let inspectorPluginFilter: string | null = null;
@@ -572,6 +625,8 @@ function buildInspectorData(tree: NonNullable<ReturnType<typeof tabTree>>): void
   // (claims, lints) are otherwise unreachable, since a deeper node always
   // owns the cursor. Whole-document props (exports!) defer to a click.
   let shownAny = false;
+  let onMusicNode = false;
+  let belowBlock = true; // walking upward: still under the block level?
   let warnings: readonly string[] = [];
   let cachedCount = 0;
   let evaluatedCount = 0;
@@ -579,11 +634,15 @@ function buildInspectorData(tree: NonNullable<ReturnType<typeof tabTree>>): void
   const pluginOrder: string[] = [];
   const seenPlugins = new Set<string>();
   for (let node: ReturnType<typeof deepestNodeAt> | null = start; node; node = node.parent) {
+    if (node.name === "TabBlock" || node.name === "Section" || node.name === "TabDocument") {
+      belowBlock = false;
+    }
     const inspection = inspectNode(view.state, node, node.parent !== null);
     if (!inspection) continue;
     warnings = inspection.installWarnings;
     if (inspection.props.length === 0) continue;
     shownAny = true;
+    if (belowBlock) onMusicNode = true;
 
     const ranges: string[] = [];
     for (let i = 0; i < node.rangeCount; i++) {
@@ -603,7 +662,7 @@ function buildInspectorData(tree: NonNullable<ReturnType<typeof tabTree>>): void
       entries.push({ node, scope, pluginId, propName, prop: p });
     }
   }
-  inspectorData = { shownAny, warnings, cachedCount, evaluatedCount, entries, pluginOrder };
+  inspectorData = { shownAny, onMusicNode, warnings, cachedCount, evaluatedCount, entries, pluginOrder };
 }
 
 /** Pure repaint from `inspectorData` + the current filter/collapse state —
@@ -613,10 +672,19 @@ function paintInspector(): void {
   const data = inspectorData;
   if (!data || !data.shownAny) {
     const none = document.createElement("div");
-    none.className = "diag-empty";
-    none.textContent = "no props here — move the cursor into a note, measure, or block";
+    none.className = "diag-empty inspector-teach";
+    none.textContent = INSPECTOR_TEACH;
     inspectorEl.appendChild(none);
     return;
+  }
+
+  // First contact: the cursor isn't ON anything musical yet (only ambient
+  // block/section/document context below) — teach the click→values move.
+  if (!data.onMusicNode) {
+    const teach = document.createElement("div");
+    teach.className = "diag-empty inspector-teach";
+    teach.textContent = INSPECTOR_TEACH;
+    inspectorEl.appendChild(teach);
   }
 
   inspectorEl.appendChild(inspectorFilterBar(data));

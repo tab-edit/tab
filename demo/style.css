@@ -263,6 +263,10 @@ button:hover {
 
 /* ——— Inspector pane ——— */
 
+.inspector-teach {
+  padding: 6px 4px;
+}
+
 .inspector-filters {
   display: flex;
   flex-wrap: wrap;
@@ -397,24 +401,24 @@ button:hover {
   overflow-y: auto;
 }
 
+/* Plain fixed default heights (per Stan: predictable beats clever — no
+   space-sharing; leftover room below the last pane is fine). Sheet leads
+   generously (don't make me resize the render pane every time), Inspector
+   is the second workspace, the rest are modest until expanded. A divider
+   drag (below) sets the pane above's height directly. */
 .side-panes .pane {
   flex: 0 0 auto;
   height: 18%;
   min-height: 34px;
-  resize: vertical;
   overflow: hidden;
 }
 
-/* Sheet leads the column, expanded generously by default (Stan: don't
-   make me resize the render pane every time) — the rest split the
-   remainder at modest heights. */
 .side-panes .pane-sheet {
   height: 55%;
 }
-.side-panes .pane-ast,
-.side-panes .pane-inspector,
-.side-panes .pane-diagnostics {
-  height: 18%;
+
+.side-panes .pane-inspector {
+  height: 30%;
 }
 
 .side-panes .pane > h2 {
@@ -427,10 +431,40 @@ button:hover {
   font-size: 9px;
 }
 
+/* !important beats the inline height a divider drag leaves behind. */
 .side-panes .pane.collapsed {
   height: auto !important;
   min-height: 0;
-  resize: none;
+}
+
+/* Divider handles between panes — the resize affordance (the old corner
+   nub was invisible). Sleek: no chrome at rest, a quiet hairline on hover;
+   the 4px hit area does the discoverability work, not pixels. */
+.pane-divider {
+  flex: 0 0 4px;
+  cursor: row-resize;
+  background: transparent;
+  transition: background 120ms;
+}
+
+.pane-divider:hover,
+.pane-divider.dragging {
+  background: rgba(91, 157, 250, 0.25);
+}
+
+/* A collapsed pane has no height to resize — its divider disappears. */
+.side-panes .pane.collapsed + .pane-divider {
+  display: none;
+}
+
+/* Caret must read against the dark editor (native caret defaults to black;
+   minimalSetup's drawSelection caret follows border-left-color). */
+.cm-content {
+  caret-color: #e8e8e8;
+}
+.cm-cursor,
+.cm-dropCursor {
+  border-left-color: #e8e8e8;
 }
 
 .side-panes .pane.collapsed > h2::before {
