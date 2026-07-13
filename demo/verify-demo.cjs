@@ -55,7 +55,7 @@ async function startServer() {
 
 (async () => {
   const server = await startServer();
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ["--autoplay-policy=no-user-gesture-required"] });
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
     const errors = [];
@@ -97,6 +97,26 @@ async function startServer() {
     );
     check(orphanDividers === 0, "no visible divider under a collapsed pane");
 
+    // ——— in-app playback (one selection-aware ▶ button) ———
+    const playBtn = await page.$("#play");
+    check(!!playBtn, "play button exists in the topbar");
+    await page.click("#play");
+    await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events > 0, { timeout: 5000 });
+    const whole = await page.evaluate(() => window.__lastPlayback.events);
+    check(whole > 0, `clicking play schedules events for the whole doc (${whole})`);
+    await page.click("#play"); // stop
+    const backToPlay = await page.$eval("#play", (el) => el.textContent.includes("play"));
+    check(backToPlay, "stop returns the button to play");
+    // Select just the first measure region and play again — fewer events.
+    await page.evaluate(() => {
+      const line = view.state.doc.line(4); // first music line of the starter doc
+      view.dispatch({ selection: { anchor: line.from, head: line.from + 8 } });
+    });
+    await page.click("#play");
+    await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events < 999, { timeout: 5000 });
+    const partial = await page.evaluate(() => window.__lastPlayback.events);
+    check(partial > 0 && partial < whole, `selection playback plays a subset (${partial} < ${whole})`);
+
     // ——— sample picker + rotating tips (first-demo-users features) ———
     const groups = await page.$$eval("#sample-picker optgroup", (els) =>
       els.map((el) => `${el.label}:${el.querySelectorAll("option").length}`)
@@ -109,6 +129,8 @@ async function startServer() {
     check(/Tom Sawyer/.test(swapped), "picking a drums sample swaps the doc");
     const tip = await page.$eval("#tip", (el) => el.textContent || "");
     check(/^Tip: /.test(tip) && tip.length > 30, `rotating tip is populated (${JSON.stringify(tip.slice(0, 40))}…)`);
+
+
     const caretColor = await page.$eval(".cm-cursor", (el) => getComputedStyle(el).borderLeftColor).catch(() => "no-caret-el");
     check(caretColor === "rgb(232, 232, 232)" || caretColor === "no-caret-el", `caret is light via view theme (${caretColor})`);
     check(collapsed.activity === true, "Activity starts collapsed");

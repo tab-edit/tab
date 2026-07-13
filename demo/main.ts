@@ -14,6 +14,7 @@ import { searchKeymap } from "@codemirror/search";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { SAMPLES } from "./samples.js";
+import { play, type PlaybackHandle } from "./playback.js";
 import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
@@ -191,8 +192,37 @@ samplePicker.addEventListener("change", () => {
   view.focus();
 });
 
-// ——— Rotating footer tips: genuinely useful, one every 20s (random,
-// never the same twice in a row). ———
+// ——— Playback: ONE selection-aware button (selection → just those
+// sounds; empty selection → the whole doc). Space mirrors it when focus
+// is outside the editor. ———
+const playButton = document.getElementById("play") as HTMLButtonElement;
+let playing: PlaybackHandle | null = null;
+const setPlayingUi = (on: boolean) => {
+  playButton.textContent = on ? "⏹ stop" : "▶ play";
+};
+const togglePlayback = () => {
+  if (playing) {
+    playing.stop();
+    playing = null;
+    setPlayingUi(false);
+    return;
+  }
+  playing = play(view.state, view.state.selection.ranges, () => {
+    playing = null;
+    setPlayingUi(false);
+  });
+  setPlayingUi(playing !== null);
+};
+playButton.addEventListener("click", togglePlayback);
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !view.hasFocus && document.activeElement?.tagName !== "INPUT") {
+    e.preventDefault();
+    togglePlayback();
+  }
+});
+
+// ——— Rotating footer tips: genuinely useful, one every 45s (random,
+// never the same twice in a row; 20s read as busy — Stan agreed). ———
 const TIPS: readonly string[] = [
   "delete the letter at the start of a tab line — the app derives the missing name and Diagnostics offers a one-click fix",
   "drag across the tab to select a column: tabs are column-based, so a selection is a time slice across all strings",
@@ -212,7 +242,7 @@ setInterval(() => {
   const next = Math.floor(Math.random() * (TIPS.length - 1));
   tipIndex = next >= tipIndex ? next + 1 : next;
   showTip();
-}, 20_000);
+}, 45_000);
 
 // Exposed for console poking and the Playwright verify loop.
 Object.assign(globalThis, { view });
