@@ -102,35 +102,40 @@ export function timeline(
     .sort((a, b) => a.atSec - b.atSec);
 }
 
-/** Karplus-Strong plucked string: a one-period noise burst circulating in
- *  a lowpassed feedback delay — the RIGHT default voice for a tab editor
- *  (pure Web Audio, no samples). Decay rides the feedback gain. */
+/** Karplus-Strong plucked string, COMPUTED into a buffer (sample-accurate).
+ *  A live feedback-delay loop is the classic implementation but Web Audio
+ *  adds a mandatory 128-sample render quantum to every cycle — every note
+ *  plays flat and anything above ~344 Hz can't form its period at all
+ *  (found the hard way: "plucked sounds very wrong"). Synthesizing the
+ *  string in JS is one average per sample; buffers are cached per note. */
+const pluckCache = new Map<string, AudioBuffer>();
+function pluckBuffer(audio: AudioContext, freq: number, durSec: number): AudioBuffer {
+  const rate = audio.sampleRate;
+  const key = `${Math.round(freq * 10)}:${Math.ceil(durSec * 4)}`;
+  const hit = pluckCache.get(key);
+  if (hit) return hit;
+  const period = Math.max(2, Math.round(rate / freq));
+  const length = Math.ceil(rate * (durSec + 0.15));
+  const buffer = audio.createBuffer(1, length, rate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < period; i++) data[i] = Math.random() * 2 - 1;
+  for (let i = period; i < length; i++) {
+    // averaged feedback = lowpass damping; 0.996 keeps decay musical
+    data[i] = 0.996 * 0.5 * (data[i - period] + data[i - period + 1]);
+  }
+  pluckCache.set(key, buffer);
+  return buffer;
+}
+
 function pluck(audio: AudioContext, master: GainNode, at: number, freq: number, dur: number): void {
-  const period = 1 / freq;
-  const burst = audio.createBuffer(1, Math.max(2, Math.ceil(audio.sampleRate * period)), audio.sampleRate);
-  const data = burst.getChannelData(0);
-  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
   const src = audio.createBufferSource();
-  src.buffer = burst;
-  const delay = audio.createDelay(Math.max(period, 0.01));
-  delay.delayTime.value = period;
-  const damp = audio.createBiquadFilter();
-  damp.type = "lowpass";
-  damp.frequency.value = Math.min(9000, freq * 12);
-  damp.Q.value = 0.0001; // NO resonance: a peak >1 makes the loop gain
-  // exceed unity and the string EXPLODES instead of decaying (found the
-  // hard way — deafening runaway on the starter doc).
-  const feedback = audio.createGain();
-  feedback.gain.value = 0.955; // decay margin well under unity
-  src.connect(delay);
-  delay.connect(damp).connect(feedback).connect(delay);
+  src.buffer = pluckBuffer(audio, freq, dur);
   const out = audio.createGain();
-  out.gain.setValueAtTime(0.22, at);
-  out.gain.setValueAtTime(0.22, at + dur * 0.6);
-  out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.08);
-  delay.connect(out).connect(master);
+  out.gain.setValueAtTime(0.3, at);
+  out.gain.setValueAtTime(0.3, at + dur * 0.7);
+  out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.1);
+  src.connect(out).connect(master);
   src.start(at);
-  src.stop(at + period + 0.01);
 }
 
 function scheduleFrom(
