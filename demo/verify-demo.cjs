@@ -129,6 +129,8 @@ async function startServer() {
     const partial = await page.evaluate(() => window.__lastPlayback.events);
     check(partial > 0 && partial < whole, `selection playback plays a subset (${partial} < ${whole})`);
     await page.keyboard.press("Escape");
+    // Clear the stale selection (it would make the next play selection-scoped).
+    await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
     // Error-dense classical sample must PLAY (out-of-range midi junk is
     // skipped, never fed to Web Audio — the Gnossienne non-finite crash).
     await page.selectOption("#sample-picker", "0:0");
