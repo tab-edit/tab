@@ -119,9 +119,14 @@ function pluckBuffer(audio: AudioContext, freq: number, durSec: number): AudioBu
   const buffer = audio.createBuffer(1, length, rate);
   const data = buffer.getChannelData(0);
   for (let i = 0; i < period; i++) data[i] = Math.random() * 2 - 1;
+  // Pick-position comb: subtracting a delayed copy of the excitation puts
+  // the "pick near the bridge" notch in the spectrum — the guitar attack.
+  const pick = Math.max(1, Math.round(period / 7));
+  for (let i = period - 1; i >= pick; i--) data[i] -= 0.5 * data[i - pick];
+  // Low strings ring longer than high ones (real-instrument decay).
+  const decay = freq < 150 ? 0.999 : freq < 330 ? 0.998 : 0.9965;
   for (let i = period; i < length; i++) {
-    // averaged feedback = lowpass damping; 0.996 keeps decay musical
-    data[i] = 0.996 * 0.5 * (data[i - period] + data[i - period + 1]);
+    data[i] = decay * 0.5 * (data[i - period] + data[i - period + 1]);
   }
   pluckCache.set(key, buffer);
   return buffer;
