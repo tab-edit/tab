@@ -48,6 +48,10 @@ export interface Player {
   pause(): void;
   resume(): void;
   seek(sec: number): void;
+  /** text → time: onset of the sound at `pos`, or the next sound on the
+   *  SAME line (columns are time within a system); undefined off this
+   *  timeline (prose, or outside a selection-scoped playback). */
+  secAt(pos: number): number | undefined;
   /** Called ~30×/s with the playhead; final call has ended=true. */
   progress(sec?: undefined): PlaybackProgress;
   stop(): void;
@@ -321,6 +325,25 @@ export function createPlayer(
       const clamped = Math.max(0, Math.min(totalSec, sec));
       if (paused) offset = clamped;
       else rebuild(clamped);
+    },
+    secAt(pos: number): number | undefined {
+      // Containment first (spans are per-line and disjoint between sounds;
+      // both ends inclusive so a caret on either edge of a fret digit
+      // counts, earlier sound winning a shared boundary). A miss — caret
+      // on a dash — snaps FORWARD to the next onset on the same line.
+      const line = state.doc.lineAt(Math.min(pos, state.doc.length));
+      let next: number | undefined;
+      let nextFrom = Infinity;
+      for (const e of events) {
+        for (const s of e.spans) {
+          if (s.from <= pos && pos <= s.to) return e.atSec;
+          if (s.from > pos && s.from <= line.to && s.from < nextFrom) {
+            nextFrom = s.from;
+            next = e.atSec;
+          }
+        }
+      }
+      return next;
     },
     progress(): PlaybackProgress {
       const sec = now();

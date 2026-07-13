@@ -16,7 +16,7 @@ import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { SAMPLES } from "./samples.js";
 import { createPlayer } from "./playback.js";
-import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
   computeActivity,
@@ -120,6 +120,12 @@ let pinned: { index: number; signature: string } | null = null;
 const rangeSignature = (ranges: readonly { from: number; to: number }[]): string =>
   ranges.map((r) => `${r.from}-${r.to}`).join(",");
 
+// Provenance for selection transactions dispatched BY the playhead follower.
+// ⌖ is a bidirectional link (clock moves cursor, cursor moves clock) — the
+// text→time direction must ignore our own dispatches or it's a seek⇄select
+// feedback loop. An annotation is exact; a suppression timer would not be.
+const playheadMove = Annotation.define<boolean>();
+
 // Column selection and selection-highlighting are toggled live from the
 // topbar checkboxes; each rides its own Compartment so a checkbox flip is a
 // single reconfigure transaction rather than tearing down the whole editor.
@@ -173,6 +179,21 @@ const view = new EditorView({
       // An edit while paused invalidates the playback timeline's spans —
       // stop cleanly instead of playing stale positions.
       if (update.docChanged && player) stopPlayback();
+      // text → time (the other half of the ⌖ link): a USER cursor move —
+      // click or arrows — seeks the player to that sound. The seeker comes
+      // to the user; the cursor is never yanked back to the old playhead.
+      if (
+        update.selectionSet &&
+        !update.docChanged &&
+        player &&
+        followPlayhead &&
+        !update.transactions.some((tr) => tr.annotation(playheadMove))
+      ) {
+        seekToSelection();
+      }
+      // Idle cursor/doc activity invalidates "the piece finished" — the
+      // next ▶ should honor the caret again, not force a from-the-top run.
+      if (!player && (update.selectionSet || update.docChanged)) playedToEnd = false;
       if (update.docChanged || update.selectionSet) scheduleRefresh();
     }),
   ],
@@ -220,6 +241,10 @@ let player: ReturnType<typeof createPlayer> = null;
 let followPlayhead = true;
 let lastSpanKey = "";
 let raf = 0;
+// The last playback ran to completion: ▶ then restarts from the top — the
+// follow cursor parks on the LAST sound, and honoring it would trap replay
+// in a one-note loop. Any idle cursor/doc activity clears this.
+let playedToEnd = false;
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const setEditable = (on: boolean) =>
@@ -250,7 +275,26 @@ const applySpans = (spans: readonly { from: number; to: number }[]) => {
       EditorView.scrollIntoView(spans[0].from, { y: "center" }),
       setFlashes.of(spans.map((s) => ({ from: s.from, to: s.to, kind: "state" as const }))),
     ],
+    annotations: playheadMove.of(true),
   });
+};
+
+// text → time: seek the player to the sound at the user's cursor. NO
+// selection rewrite — while paused, a canonicalized (whole-sound) selection
+// would make the next keystroke REPLACE the sound; the flash alone is the
+// feedback. lastSpanKey is primed so the next tick doesn't snap the cursor
+// onto the sound either; lock-step resumes from the NEXT sound onward.
+const seekToSelection = () => {
+  if (!player) return;
+  const sec = player.secAt(view.state.selection.main.head);
+  if (sec === undefined) return;
+  player.seek(sec);
+  const spans = player.progress().spans;
+  if (!spans) return;
+  lastSpanKey = rangeSignature(spans);
+  const flashes = spans.map((s) => ({ from: s.from, to: s.to, kind: "state" as const }));
+  // Deferred: dispatching synchronously inside an update listener re-enters CM.
+  queueMicrotask(() => view.dispatch({ effects: setFlashes.of(flashes) }));
 };
 
 // Forced follow-jump (⌖ click, slider seek): works while PAUSED, and against
@@ -274,8 +318,12 @@ const tick = () => {
     const key = rangeSignature(p.spans);
     if (key !== lastSpanKey) applySpans(p.spans);
   }
-  if (p.ended) stopPlayback();
-  else raf = requestAnimationFrame(tick);
+  if (p.ended) {
+    playedToEnd = true;
+    stopPlayback();
+  } else {
+    raf = requestAnimationFrame(tick);
+  }
 };
 
 const togglePlayback = () => {
@@ -298,6 +346,14 @@ const togglePlayback = () => {
     timbrePicker.value as import("./playback.js").Timbre
   );
   if (!player) return;
+  // Play from HERE: a caret on/before a sound starts playback at that sound
+  // (a non-empty selection instead scopes the whole timeline to itself, and
+  // a finished piece replays from the top — see playedToEnd).
+  if (!playedToEnd && view.state.selection.ranges.every((r) => r.empty)) {
+    const sec = player.secAt(view.state.selection.main.head);
+    if (sec !== undefined && sec > 0) player.seek(sec);
+  }
+  playedToEnd = false;
   playButton.textContent = "⏸";
   slider.disabled = false;
   lastSpanKey = "";

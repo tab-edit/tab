@@ -191,6 +191,40 @@ async function startServer() {
     await page.click("#follow-playhead"); // on → forced jump, even paused
     const jumped = await page.evaluate(() => view.state.selection.main.from);
     check(jumped === afterScrub, `⌖ jumps the paused selection back to the playhead (0 → ${jumped})`);
+    // text→time (⌖ is a LINK): a user cursor move seeks the player — the
+    // SEEKER comes to the user; the cursor is never yanked back, and the
+    // selection is never rewritten (typing while paused must not replace
+    // the sound).
+    const firstSoundPos = await page.evaluate(() => view.state.doc.line(4).from + 4);
+    await page.evaluate((p) => view.dispatch({ selection: { anchor: p, head: p } }), firstSoundPos);
+    await page.waitForTimeout(200);
+    const sliderAfterClick = await page.$eval("#transport-slider", (el) => Number(el.value));
+    check(sliderAfterClick < 300, `clicking an early sound while paused seeks the player back (slider 900 → ${sliderAfterClick})`);
+    const caretAfterSeek = await page.evaluate(() => view.state.selection.main.head);
+    check(caretAfterSeek === firstSoundPos, `the seek never yanks or rewrites the user's cursor (${caretAfterSeek})`);
+    await page.click("#play"); // resume — lock-step continues FROM the clicked sound
+    await page.waitForTimeout(400);
+    const resumedPos = await page.evaluate(() => view.state.selection.main.from);
+    check(resumedPos < afterScrub, `resume plays from the clicked sound, not the old seeker (${resumedPos} < ${afterScrub})`);
+    await page.keyboard.press("Escape");
+    // Play-from-HERE: pressing ▶ with a caret on a sound starts there.
+    const lastChordPos = await page.evaluate(() => view.state.doc.line(4).from + 10);
+    await page.evaluate((p) => view.dispatch({ selection: { anchor: p, head: p } }), lastChordPos);
+    await page.click("#play");
+    await page.waitForTimeout(250);
+    const startSlider = await page.$eval("#transport-slider", (el) => Number(el.value));
+    check(startSlider > 500, `▶ with the caret on a late sound starts playback there (slider ${startSlider})`);
+    // After the piece ends ON ITS OWN, ▶ replays from the top — the follow
+    // cursor parked on the last sound must not trap replay in a 1-note loop.
+    await page.$eval("#transport-slider", (el) => {
+      el.value = "995";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await page.waitForFunction(() => document.querySelector("#play").textContent.trim() === "▶", { timeout: 20000 });
+    await page.click("#play");
+    await page.waitForTimeout(250);
+    const replaySlider = await page.$eval("#transport-slider", (el) => Number(el.value));
+    check(replaySlider < 300, `after a natural end, ▶ restarts from the top (slider ${replaySlider})`);
     await page.keyboard.press("Escape");
     // Clear the (multi-range) playhead selection — later checks inherit it.
     await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
