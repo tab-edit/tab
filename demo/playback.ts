@@ -77,6 +77,14 @@ export function timeline(
       )
     );
   }
+  // MIDI is 7-bit: anything outside 0..127 is junk data upstream (e.g.
+  // prose years like "1866" parsing as frets — audit F5, gate pending) and
+  // maps to a non-finite oscillator frequency that kills Web Audio.
+  const playable = events.filter((e: SmfNote) => e.midi >= 0 && e.midi <= 127);
+  if (playable.length < events.length) {
+    console.warn(`playback: skipped ${events.length - playable.length} out-of-range midi events`);
+  }
+  events = playable;
   if (events.length === 0) return [];
   const secPerTick = 60 / (bpmOf(state) * PPQ);
   const baseTick = Math.min(...events.map((e: SmfNote) => e.tick));
@@ -157,7 +165,7 @@ export function createPlayer(
   globalThis.__lastPlayback = { events: events.length, totalSec };
 
   const now = (): number =>
-    paused ? offset : Math.min(totalSec, offset + (audio.currentTime - startedAt));
+    paused ? offset : Math.max(0, Math.min(totalSec, offset + (audio.currentTime - startedAt)));
 
   const rebuild = (fromSec: number): void => {
     master.disconnect();

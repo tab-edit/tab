@@ -129,6 +129,18 @@ async function startServer() {
     const partial = await page.evaluate(() => window.__lastPlayback.events);
     check(partial > 0 && partial < whole, `selection playback plays a subset (${partial} < ${whole})`);
     await page.keyboard.press("Escape");
+    // Error-dense classical sample must PLAY (out-of-range midi junk is
+    // skipped, never fed to Web Audio — the Gnossienne non-finite crash).
+    await page.selectOption("#sample-picker", "0:0");
+    await page.waitForTimeout(2000);
+    await page.click("#play");
+    await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events > 1000, { timeout: 8000 });
+    const satieTime = await page.$eval("#transport-time", (el) => el.textContent);
+    check(!satieTime.includes("-"), `elapsed time never negative (${satieTime})`);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { const d = view.state.doc.length; view.dispatch({ changes: { from: 0, to: d, insert: "Title: Demo Song\nTempo: 100\n\ne|--0--2--3--|--2--0-----|\nB|3--------0-|-----3--1--|\n" } }); });
+    await page.waitForTimeout(600);
+    await page.keyboard.press("Escape");
     // Follow-the-playhead: the selection must WALK the text while playing.
     await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
     await page.click("#play");
