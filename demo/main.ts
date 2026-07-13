@@ -195,7 +195,7 @@ samplePicker.addEventListener("change", () => {
 // never the same twice in a row). ———
 const TIPS: readonly string[] = [
   "delete the letter at the start of a tab line — the app derives the missing name and Diagnostics offers a one-click fix",
-  "Alt+drag makes a column selection: tabs are column-based, so that selects a time slice across all strings",
+  "drag across the tab to select a column: tabs are column-based, so a selection is a time slice across all strings",
   "click any note and the Inspector shows everything computed for it — pitch, timing, measure, and which plugin decided",
   "the Sheet pane re-renders live as you type; toggle it between TAB and standard notation",
   "Export MIDI plays in any player — or round-trip your tab losslessly through Export then Import MusicXML",
