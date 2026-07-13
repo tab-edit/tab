@@ -234,6 +234,7 @@ const stopPlayback = () => {
   slider.value = "0";
   timeEl.textContent = "";
   setEditable(true);
+  view.dispatch({ effects: setFlashes.of([]) });
 };
 
 const tick = () => {
@@ -245,9 +246,14 @@ const tick = () => {
     const key = `${p.span.from}-${p.span.to}`;
     if (key !== lastSpanKey) {
       lastSpanKey = key;
+      // Selection AND a decoration flash: decorations render regardless of
+      // focus/selection-layer subtleties, so the playhead is unmissable.
       view.dispatch({
         selection: { anchor: p.span.from, head: p.span.to },
-        effects: EditorView.scrollIntoView(p.span.from, { y: "nearest" }),
+        effects: [
+          EditorView.scrollIntoView(p.span.from, { y: "center" }),
+          setFlashes.of([{ from: p.span.from, to: p.span.to, kind: "state" }]),
+        ],
       });
     }
   }
