@@ -135,6 +135,10 @@ async function startServer() {
     await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events < 999, { timeout: 5000 });
     const partial = await page.evaluate(() => window.__lastPlayback.events);
     check(partial > 0 && partial < whole, `selection playback plays a subset (${partial} < ${whole})`);
+    check(
+      await page.$eval("#tip", (el) => el.classList.contains("hint-live") && /selection/.test(el.textContent)),
+      "first scoped play narrates the way back to the whole tab"
+    );
     await page.keyboard.press("Escape");
     // Clear the stale selection (it would make the next play selection-scoped).
     await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
@@ -262,6 +266,29 @@ async function startServer() {
     await page.waitForTimeout(250);
     const replaySlider = await page.$eval("#transport-slider", (el) => Number(el.value));
     check(replaySlider < 300, `after a natural end, ▶ restarts from the top (slider ${replaySlider})`);
+    await page.keyboard.press("Escape");
+    // Selection = a region of the tab GRID (time × voices), not the glyphs
+    // the highlight staircase touched: a rough drag across the block plays
+    // FULL vertical slices; a drag along one line SOLOS that voice.
+    const wholeCount = await page.evaluate(() => window.__lastPlayback.events);
+    await page.evaluate(() => {
+      const l1 = view.state.doc.line(4);
+      const l2 = view.state.doc.line(5);
+      view.dispatch({ selection: { anchor: l1.from + 8, head: l2.from + 5 } });
+    });
+    await page.click("#play");
+    await page.waitForTimeout(300);
+    const stairCount = await page.evaluate(() => window.__lastPlayback.events);
+    check(stairCount === wholeCount, `a staircase drag plays full time-slices, never a thinned groove (${stairCount} = ${wholeCount})`);
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => {
+      const l = view.state.doc.line(5);
+      view.dispatch({ selection: { anchor: l.from + 2, head: l.to } });
+    });
+    await page.click("#play");
+    await page.waitForTimeout(300);
+    const soloCount = await page.evaluate(() => window.__lastPlayback.events);
+    check(soloCount > 0 && soloCount < wholeCount, `a single-line selection solos that voice (${soloCount} < ${wholeCount})`);
     await page.keyboard.press("Escape");
     // Clear the (multi-range) playhead selection — later checks inherit it.
     await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));

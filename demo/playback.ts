@@ -83,14 +83,6 @@ export function timeline(
   const tree = tabTree(state);
   if (!tree) return [];
   let events = readTabProp(state, documentMidi, tree.topNode);
-  const selecting = ranges.some((r) => !r.empty);
-  if (selecting) {
-    events = events.filter((e: SmfNote) =>
-      ranges.some(
-        (r) => !r.empty && (e.sourceFrom ?? 0) < r.to && r.from < (e.sourceTo ?? 0)
-      )
-    );
-  }
   // MIDI is 7-bit: anything outside 0..127 is junk data upstream (e.g.
   // prose years like "1866" parsing as frets — audit F5, gate pending) and
   // maps to a non-finite oscillator frequency that kills Web Audio.
@@ -125,15 +117,47 @@ export function timeline(
     return spans;
   };
   const secPerTick = 60 / (bpmOf(state) * PPQ);
-  const baseTick = Math.min(...events.map((e: SmfNote) => e.tick));
-  return events
-    .map((e: SmfNote) => ({
-      atSec: (e.tick - baseTick) * secPerTick,
-      durSec: Math.max(0.05, e.durationTicks * secPerTick),
-      midi: e.midi,
-      percussion: e.percussion === true,
-      spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
-    }))
+  let timed: TimedEvent[] = events.map((e: SmfNote) => ({
+    atSec: e.tick * secPerTick,
+    durSec: Math.max(0.05, e.durationTicks * secPerTick),
+    midi: e.midi,
+    percussion: e.percussion === true,
+    spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
+  }));
+  // A selection is a region of the tab GRID (x = time, y = voice), NOT the
+  // set of glyphs the highlight staircase touched: window = earliest→latest
+  // moment of the covered sounds; voices = the tab lines the selection
+  // touches; play EVERY touched-voice sound inside the window. A rough drag
+  // over a drum block therefore plays the full groove for that stretch (a
+  // groove minus its kick is a DIFFERENT groove — glyph-subset playback was
+  // musically meaningless); a drag along one line deliberately SOLOS that
+  // voice (exact for drums, one sound per line; a guitar chord is one Sound
+  // across lines and plays whole — the atomic unit is the Sound). Lines
+  // with no sounds (annotations like "|--repeat 8x--|") add no voices.
+  const sel = ranges.filter((r) => !r.empty);
+  if (sel.length > 0) {
+    const covered = timed.filter((e) =>
+      e.spans.some((s) => sel.some((r) => s.from < r.to && r.from < s.to))
+    );
+    if (covered.length === 0) return [];
+    const t0 = Math.min(...covered.map((e) => e.atSec));
+    const t1 = Math.max(...covered.map((e) => e.atSec + e.durSec));
+    const voiceLines = new Set<number>();
+    for (const r of sel) {
+      const lastLine = state.doc.lineAt(Math.min(r.to, state.doc.length)).number;
+      for (let n = state.doc.lineAt(r.from).number; n <= lastLine; n++) voiceLines.add(n);
+    }
+    timed = timed.filter(
+      (e) =>
+        e.atSec >= t0 &&
+        e.atSec < t1 &&
+        e.spans.some((s) => voiceLines.has(state.doc.lineAt(s.from).number))
+    );
+  }
+  if (timed.length === 0) return [];
+  const base = Math.min(...timed.map((e) => e.atSec));
+  return timed
+    .map((e) => ({ ...e, atSec: e.atSec - base }))
     .sort((a, b) => a.atSec - b.atSec);
 }
 

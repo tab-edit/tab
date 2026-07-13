@@ -195,9 +195,16 @@ const view = new EditorView({
       ) {
         seekToSelection();
       }
-      // Idle cursor/doc activity invalidates "the piece finished" — the
+      // USER cursor/doc activity invalidates "the piece finished" — the
       // next ▶ should honor the caret again, not force a from-the-top run.
-      if (!player && (update.selectionSet || update.docChanged)) playedToEnd = false;
+      // (Our own post-stop selection hand-back must not clear it.)
+      if (
+        !player &&
+        (update.selectionSet || update.docChanged) &&
+        !update.transactions.some((tr) => tr.annotation(playheadMove))
+      ) {
+        playedToEnd = false;
+      }
       if (update.docChanged || update.selectionSet) scheduleRefresh();
     }),
   ],
@@ -250,6 +257,7 @@ let raf = 0;
 // in a one-note loop. Any idle cursor/doc activity clears this.
 let playedToEnd = false;
 let taughtFollow = false; // first play narrates the follow behavior, once
+let taughtSelection = false; // first scoped play narrates how to get back to the whole tab
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const setEditable = (on: boolean) =>
@@ -266,7 +274,17 @@ const stopPlayback = () => {
   followButton.disabled = true;
   timeEl.textContent = "";
   setEditable(true);
-  view.dispatch({ effects: setFlashes.of([]) });
+  // Follow BORROWED the selection — hand it back as a caret at the last
+  // sound. A leftover multi-range follow selection reads as user state and
+  // would silently scope the next ▶ to one chord (the replay trap through
+  // the selection path). A selection the USER made stays untouched.
+  const ours = rangeSignature(view.state.selection.ranges) === lastSpanKey;
+  view.dispatch({
+    effects: setFlashes.of([]),
+    ...(ours
+      ? { selection: { anchor: view.state.selection.main.from }, annotations: playheadMove.of(true) }
+      : {}),
+  });
 };
 
 // Selection AND a decoration flash: decorations render regardless of
@@ -371,7 +389,14 @@ const togglePlayback = () => {
   // Play from HERE: a caret on/before a sound starts playback at that sound
   // (a non-empty selection instead scopes the whole timeline to itself, and
   // a finished piece replays from the top — see playedToEnd).
-  if (!playedToEnd && view.state.selection.ranges.every((r) => r.empty)) {
+  if (view.state.selection.ranges.some((r) => !r.empty)) {
+    // A scoped run stays REPLAYABLE (musicians practice a passage on
+    // repeat) — so the way back to the whole tab is taught the first time.
+    if (!taughtSelection) {
+      taughtSelection = true;
+      sayTip("playing just the selection — replay ▶ as often as you like; click anywhere to release it and play on");
+    }
+  } else if (!playedToEnd) {
     const sec = player.secAt(view.state.selection.main.head);
     if (sec !== undefined && sec > 0) player.seek(sec);
   }
