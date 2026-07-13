@@ -109,8 +109,15 @@ async function startServer() {
     // ——— in-app playback (one selection-aware ▶ button) ———
     const playBtn = await page.$("#play");
     check(!!playBtn, "play button exists in the topbar");
+    check(await page.$eval("#play", (el) => /cursor/.test(el.title)), "▶ tooltip teaches play-from-cursor");
+    check(await page.$eval("#follow-playhead", (el) => el.disabled), "⌖ follow is disabled while idle (nothing to follow)");
     await page.click("#play");
     await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events > 0, { timeout: 5000 });
+    check(await page.$eval("#follow-playhead", (el) => !el.disabled), "⌖ follow wakes with the transport");
+    check(
+      await page.$eval("#tip", (el) => el.classList.contains("hint-live") && /follows the music/.test(el.textContent)),
+      "first play narrates the follow behavior in the tip line"
+    );
     const whole = await page.evaluate(() => window.__lastPlayback.events);
     check(whole > 0, `clicking play schedules events for the whole doc (${whole})`);
     check(await page.$eval("#play", (el) => el.textContent.trim() === "⏸"), "playing shows pause glyph");
@@ -188,6 +195,21 @@ async function startServer() {
     // click itself must jump the selection back to the playhead.
     await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
     await page.click("#follow-playhead"); // off
+    check(
+      await page.$eval(
+        "#follow-playhead",
+        (el) =>
+          el.textContent.trim() === "⌖ follow" &&
+          el.getAttribute("aria-pressed") === "false" &&
+          !el.classList.contains("active") &&
+          !el.title
+      ),
+      "⌖ follow: constant verb label, state via pressed styling, no tooltip"
+    );
+    check(
+      await page.$eval("#tip", (el) => el.classList.contains("hint-live") && /not following/.test(el.textContent)),
+      "toggling ⌖ narrates the change in the tip line"
+    );
     await page.click("#follow-playhead"); // on → forced jump, even paused
     const jumped = await page.evaluate(() => view.state.selection.main.from);
     check(jumped === afterScrub, `⌖ jumps the paused selection back to the playhead (0 → ${jumped})`);
@@ -206,6 +228,21 @@ async function startServer() {
     await page.waitForTimeout(400);
     const resumedPos = await page.evaluate(() => view.state.selection.main.from);
     check(resumedPos < afterScrub, `resume plays from the clicked sound, not the old seeker (${resumedPos} < ${afterScrub})`);
+    // Drag-select while playing: a non-empty selection is the user FORMING
+    // a region, not pointing — it must not seek (per-mousemove rebuilds =
+    // audible stutter) and follow must not overwrite it.
+    const preDrag = await page.$eval("#transport-slider", (el) => Number(el.value));
+    const dragSel = await page.evaluate(() => {
+      const l = view.state.doc.line(4);
+      view.dispatch({ selection: { anchor: l.from + 9, head: l.from + 11 } });
+      return `${view.state.selection.main.from}:${view.state.selection.main.to}`;
+    });
+    await page.waitForTimeout(150);
+    const postDrag = await page.$eval("#transport-slider", (el) => Number(el.value));
+    check(postDrag - preDrag < 150, `a drag selection does not seek (slider ${preDrag} → ${postDrag})`);
+    await page.waitForTimeout(900);
+    const dragKept = await page.evaluate(() => `${view.state.selection.main.from}:${view.state.selection.main.to}`);
+    check(dragKept === dragSel, `follow never overwrites the user's selection (${dragKept})`);
     await page.keyboard.press("Escape");
     // Play-from-HERE: pressing ▶ with a caret on a sound starts there.
     const lastChordPos = await page.evaluate(() => view.state.doc.line(4).from + 10);
@@ -239,6 +276,9 @@ async function startServer() {
     await page.selectOption("#sample-picker", "2:1"); // Drums / Tom Sawyer
     const swapped = await page.evaluate(() => view.state.doc.toString());
     check(/Tom Sawyer/.test(swapped), "picking a drums sample swaps the doc");
+    // A live transport message may still be holding the line — wait for
+    // the rotation to resume before asserting on it.
+    await page.waitForFunction(() => /^Tip: /.test(document.querySelector("#tip").textContent || ""), { timeout: 12000 });
     const tip = await page.$eval("#tip", (el) => el.textContent || "");
     check(/^Tip: /.test(tip) && tip.length > 30, `rotating tip is populated (${JSON.stringify(tip.slice(0, 40))}…)`);
 

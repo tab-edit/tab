@@ -602,6 +602,7 @@ details.menu .menu-items button { text-align: left; }
   background: transparent;
 }
 .follow.active { color: var(--accent); }
+.follow:disabled { opacity: 0.35; } /* idle: nothing to follow (slider rule) */
 .statusbar .hint {
   border: none;
   background: none;
@@ -609,7 +610,10 @@ details.menu .menu-items button { text-align: left; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: color 0.3s ease;
 }
+/* Moment-of-use transport message preempting the tip rotation. */
+.statusbar .hint.hint-live { color: var(--accent); }
 
 /* Inspector value truncation/expand/copy */
 .inspector-value.expandable { cursor: pointer; }

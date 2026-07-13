@@ -68,7 +68,7 @@
     </main>
     <footer class="statusbar">
       <div class="transport">
-        <button id="play" title="play the tab — or just your selection (Space)">▶</button>
+        <button id="play" title="play from the cursor — or just your selection (Space)">▶</button>
         <span id="transport-time" class="transport-time"></span>
         <input id="transport-slider" class="transport-slider" type="range" min="0" max="1000" value="0" disabled />
         <select id="timbre-picker" class="sample-picker timbre-picker" title="playback sound for pitched notes (drums always play as drums)">
@@ -76,7 +76,7 @@
           <option value="tone">tone</option>
           <option value="soft">soft</option>
         </select>
-        <button id="follow-playhead" class="follow active" title="follow playback: cursor moves to each sound as it plays">⌖</button>
+        <button id="follow-playhead" class="follow active" aria-pressed="true" disabled>⌖ follow</button>
       </div>
       <div class="hint" id="tip"></div>
     </footer>

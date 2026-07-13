@@ -182,11 +182,15 @@ const view = new EditorView({
       // text → time (the other half of the ⌖ link): a USER cursor move —
       // click or arrows — seeks the player to that sound. The seeker comes
       // to the user; the cursor is never yanked back to the old playhead.
+      // Carets only: a DRAG (non-empty selection) is the user FORMING a
+      // region, not pointing — seeking on every mousemove rebuilds the
+      // audio graph mid-gesture (audible stutter) and fights the drag.
       if (
         update.selectionSet &&
         !update.docChanged &&
         player &&
         followPlayhead &&
+        update.state.selection.main.empty &&
         !update.transactions.some((tr) => tr.annotation(playheadMove))
       ) {
         seekToSelection();
@@ -245,6 +249,7 @@ let raf = 0;
 // follow cursor parks on the LAST sound, and honoring it would trap replay
 // in a one-note loop. Any idle cursor/doc activity clears this.
 let playedToEnd = false;
+let taughtFollow = false; // first play narrates the follow behavior, once
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 const setEditable = (on: boolean) =>
@@ -258,6 +263,7 @@ const stopPlayback = () => {
   playButton.textContent = "▶";
   slider.disabled = true;
   slider.value = "0";
+  followButton.disabled = true;
   timeEl.textContent = "";
   setEditable(true);
   view.dispatch({ effects: setFlashes.of([]) });
@@ -316,7 +322,23 @@ const tick = () => {
   timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
   if (followPlayhead && p.spans) {
     const key = rangeSignature(p.spans);
-    if (key !== lastSpanKey) applySpans(p.spans);
+    if (key !== lastSpanKey) {
+      // A non-empty selection we didn't dispatch is the USER's (mid-drag,
+      // or a region they're keeping) — never overwrite it. Tracking stays
+      // visible as the flash alone, without scrolling them away; the
+      // selection-move resumes once they collapse back to a caret.
+      const sel = view.state.selection;
+      const userOwnsSelection =
+        sel.ranges.some((r) => !r.empty) && rangeSignature(sel.ranges) !== lastSpanKey;
+      if (userOwnsSelection) {
+        lastSpanKey = key;
+        view.dispatch({
+          effects: setFlashes.of(p.spans.map((s) => ({ from: s.from, to: s.to, kind: "state" as const }))),
+        });
+      } else {
+        applySpans(p.spans);
+      }
+    }
   }
   if (p.ended) {
     playedToEnd = true;
@@ -356,7 +378,12 @@ const togglePlayback = () => {
   playedToEnd = false;
   playButton.textContent = "⏸";
   slider.disabled = false;
+  followButton.disabled = false;
   lastSpanKey = "";
+  if (!taughtFollow && followPlayhead) {
+    taughtFollow = true;
+    sayTip("the cursor follows the music — click any note to play from there (⌖ to stop following)");
+  }
   setEditable(false);
   view.focus(); // readOnly; focus makes the follow-selection fully visible
   raf = requestAnimationFrame(tick);
@@ -370,9 +397,24 @@ slider.addEventListener("input", () => {
   // change on its own) — jump explicitly so the selection tracks the scrub.
   if (followPlayhead) jumpToPlayhead();
 });
+// ⌖ follow is a VERB with a pressed state (like Bold in an editor): the
+// constant label names the action, active styling + aria-pressed show the
+// state, the tip line narrates the change at the moment it happens. No
+// tooltip — a control that names itself in words has nothing left to say.
+// It is only enabled while a player exists (idle "following" is
+// meaningless — same rule as the slider beside it).
+const renderFollowButton = () => {
+  followButton.classList.toggle("active", followPlayhead);
+  followButton.setAttribute("aria-pressed", String(followPlayhead));
+};
 followButton.addEventListener("click", () => {
   followPlayhead = !followPlayhead;
-  followButton.classList.toggle("active", followPlayhead);
+  renderFollowButton();
+  sayTip(
+    followPlayhead
+      ? "following: the cursor tracks each sound — place it anywhere to play from there"
+      : "not following: playback keeps its own position; the cursor is yours"
+  );
   if (followPlayhead) jumpToPlayhead(); // jump NOW — paused included
 });
 document.addEventListener("keydown", (e) => {
@@ -405,6 +447,8 @@ const TIPS: readonly string[] = [
   "Export MIDI plays in any player; Export/Import MusicXML round-trips the music itself — prose and annotations aren't carried over",
   "prose lives alongside music: add a line like “Tuning: D A D G B e” or “Tempo: 140” above a block and watch it take effect",
   "pick a sample from the dropdown up top — real drum, bass, and guitar tabs, plus a 16th-century lute piece",
+  "while music plays, click any note and playback jumps there — ⌖ follow turns the tracking off",
+  "press ▶ with the cursor mid-song and it plays from that spot; select a passage first and ▶ plays only that",
 ];
 const tipEl = document.getElementById("tip") as HTMLElement;
 let tipIndex = Math.floor(Math.random() * TIPS.length);
@@ -412,11 +456,28 @@ const showTip = () => {
   tipEl.textContent = `Tip: ${TIPS[tipIndex]}`;
 };
 showTip();
+let tipHoldUntil = 0;
 setInterval(() => {
+  if (Date.now() < tipHoldUntil) return; // a live transport message is up
   const next = Math.floor(Math.random() * (TIPS.length - 1));
   tipIndex = next >= tipIndex ? next + 1 : next;
   showTip();
 }, 45_000);
+
+// The tip line doubles as the transport's VOICE: moment-of-use messages
+// (⌖ toggled, first play) preempt the rotation briefly, so the teaching
+// lands while the user is looking — not on a 45-second lottery. Tooltips
+// stay as reinforcement only; they teach nobody who doesn't already hover.
+const sayTip = (text: string, holdMs = 6000): void => {
+  tipHoldUntil = Date.now() + holdMs;
+  tipEl.textContent = text;
+  tipEl.classList.add("hint-live");
+  setTimeout(() => {
+    if (Date.now() < tipHoldUntil) return; // superseded by a newer message
+    tipEl.classList.remove("hint-live");
+    showTip();
+  }, holdMs);
+};
 
 // Exposed for console poking and the Playwright verify loop.
 Object.assign(globalThis, { view });
