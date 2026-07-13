@@ -23,6 +23,8 @@ interface TimedEvent {
   readonly sourceTo: number;
 }
 
+export type Timbre = "plucked" | "tone" | "soft";
+
 export interface PlaybackProgress {
   readonly sec: number;
   readonly totalSec: number;
@@ -45,7 +47,7 @@ export interface Player {
 
 declare global {
   // Driver-inspectable playback evidence (headless audio is inaudible).
-  var __lastPlayback: { events: number; totalSec: number } | undefined;
+  var __lastPlayback: { events: number; totalSec: number; timbre: string } | undefined;
 }
 
 let ctx: AudioContext | null = null;
@@ -100,12 +102,41 @@ export function timeline(
     .sort((a, b) => a.atSec - b.atSec);
 }
 
+/** Karplus-Strong plucked string: a one-period noise burst circulating in
+ *  a lowpassed feedback delay — the RIGHT default voice for a tab editor
+ *  (pure Web Audio, no samples). Decay rides the feedback gain. */
+function pluck(audio: AudioContext, master: GainNode, at: number, freq: number, dur: number): void {
+  const period = 1 / freq;
+  const burst = audio.createBuffer(1, Math.max(2, Math.ceil(audio.sampleRate * period)), audio.sampleRate);
+  const data = burst.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  const src = audio.createBufferSource();
+  src.buffer = burst;
+  const delay = audio.createDelay(Math.max(period, 0.01));
+  delay.delayTime.value = period;
+  const damp = audio.createBiquadFilter();
+  damp.type = "lowpass";
+  damp.frequency.value = Math.min(12000, freq * 14);
+  const feedback = audio.createGain();
+  feedback.gain.value = 0.985; // natural string decay; envelope below ends the note
+  src.connect(delay);
+  delay.connect(damp).connect(feedback).connect(delay);
+  const out = audio.createGain();
+  out.gain.setValueAtTime(0.35, at);
+  out.gain.setValueAtTime(0.35, at + dur * 0.6);
+  out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.08);
+  delay.connect(out).connect(master);
+  src.start(at);
+  src.stop(at + period + 0.01);
+}
+
 function scheduleFrom(
   audio: AudioContext,
   master: GainNode,
   events: readonly TimedEvent[],
   offsetSec: number,
-  t0: number
+  t0: number,
+  timbre: Timbre
 ): void {
   for (const e of events) {
     if (e.atSec + e.durSec <= offsetSec) continue;
@@ -127,9 +158,11 @@ function scheduleFrom(
       gain.gain.exponentialRampToValueAtTime(0.001, at + len);
       src.connect(band).connect(gain).connect(master);
       src.start(at);
+    } else if (timbre === "plucked") {
+      pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur);
     } else {
       const osc = audio.createOscillator();
-      osc.type = "triangle";
+      osc.type = timbre === "soft" ? "sine" : "triangle";
       osc.frequency.value = 440 * 2 ** ((e.midi - 69) / 12);
       const gain = audio.createGain();
       gain.gain.setValueAtTime(0, at);
@@ -145,7 +178,8 @@ function scheduleFrom(
 
 export function createPlayer(
   state: EditorState,
-  ranges: readonly SelectionRange[]
+  ranges: readonly SelectionRange[],
+  timbre: Timbre = "plucked"
 ): Player | null {
   const events = timeline(state, ranges);
   if (events.length === 0) return null;
@@ -161,8 +195,8 @@ export function createPlayer(
   let startedAt = audio.currentTime + 0.05; // ctx-time of playback origin
   let offset = 0; // seconds into the piece at `startedAt`
   let paused = false;
-  scheduleFrom(audio, master, events, 0, startedAt);
-  globalThis.__lastPlayback = { events: events.length, totalSec };
+  scheduleFrom(audio, master, events, 0, startedAt, timbre);
+  globalThis.__lastPlayback = { events: events.length, totalSec, timbre };
 
   const now = (): number =>
     paused ? offset : Math.max(0, Math.min(totalSec, offset + (audio.currentTime - startedAt)));
@@ -174,7 +208,7 @@ export function createPlayer(
     master.connect(audio.destination);
     startedAt = audio.currentTime + 0.02;
     offset = fromSec;
-    scheduleFrom(audio, master, events, fromSec, startedAt);
+    scheduleFrom(audio, master, events, fromSec, startedAt, timbre);
   };
 
   return {

@@ -215,6 +215,7 @@ const playButton = document.getElementById("play") as HTMLButtonElement;
 const slider = document.getElementById("transport-slider") as HTMLInputElement;
 const timeEl = document.getElementById("transport-time") as HTMLElement;
 const followButton = document.getElementById("follow-playhead") as HTMLButtonElement;
+const timbrePicker = document.getElementById("timbre-picker") as HTMLSelectElement;
 let player: ReturnType<typeof createPlayer> = null;
 let followPlayhead = true;
 let lastSpanKey = "";
@@ -275,7 +276,11 @@ const togglePlayback = () => {
     }
     return;
   }
-  player = createPlayer(view.state, view.state.selection.ranges);
+  player = createPlayer(
+    view.state,
+    view.state.selection.ranges,
+    timbrePicker.value as import("./playback.js").Timbre
+  );
   if (!player) return;
   playButton.textContent = "⏸";
   slider.disabled = false;

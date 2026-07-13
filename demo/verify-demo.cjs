@@ -211,6 +211,18 @@ async function startServer() {
     await copyBtn.asElement().click();
     const clip = await page.evaluate(() => navigator.clipboard.readText());
     check(clip.length > 230 && !clip.endsWith("…"), `copy writes the FULL untruncated value (${clip.length} chars)`);
+
+    // ——— playback timbre selection ———
+    const timbreDefault = await page.$eval("#timbre-picker", (el) => el.value);
+    check(timbreDefault === "plucked", `stringed default timbre is plucked (${timbreDefault})`);
+    await page.selectOption("#timbre-picker", "tone");
+    await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
+    await page.click("#play");
+    await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.timbre, { timeout: 5000 });
+    const timbre = await page.evaluate(() => window.__lastPlayback.timbre);
+    check(timbre === "tone", `switching timbre takes effect (${timbre})`);
+    await page.keyboard.press("Escape");
+    await page.selectOption("#timbre-picker", "plucked");
     check(collapsed.activity === true, "Activity starts collapsed");
 
     // ——— 3–5. default sizes + full use of the column ———

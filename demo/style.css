@@ -626,3 +626,5 @@ details.menu .menu-items button { text-align: left; }
 }
 .inspector-row:hover .inspector-copy { opacity: 1; }
 .inspector-copy:hover { color: var(--accent); }
+
+.timbre-picker { margin-left: 0; font-size: 11px; }
