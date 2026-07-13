@@ -598,13 +598,18 @@ function formatValue(v: unknown): string {
     }
     // Frac prints as an exact fraction.
     if ("num" in o && "den" in o && Object.keys(o).length === 2) return `${o.num}/${o.den}`;
-    const json = JSON.stringify(v, (_k, val) =>
+    return JSON.stringify(v, (_k, val) =>
       val instanceof Map ? Object.fromEntries(val) : val
     );
-    return json.length > 180 ? `${json.slice(0, 180)}…` : json;
   }
   return JSON.stringify(v);
 }
+
+// Uniform display budget for ALL values (strings included — sectionXml used
+// to dump untruncated); rows expose click-to-expand + copy-full instead.
+const VALUE_BUDGET = 180;
+const truncate = (s: string): string =>
+  s.length > VALUE_BUDGET ? `${s.slice(0, VALUE_BUDGET)}…` : s;
 
 // ——— Inspector: one row per prop, grouped by the OWNING plugin (prop ids
 // are "pluginId/propName"). Filter/collapse state is module-level so it
@@ -683,9 +688,34 @@ function inspectorRow(entry: InspectorEntry): HTMLElement {
   }
 
   const value = document.createElement("span");
+  const fullText = p.error ? `⚠ ${p.error}` : ` = ${formatValue(p.value)}`;
+  const truncatable = fullText.length > VALUE_BUDGET;
+  let expanded = false;
   value.className = p.error ? "inspector-value inspector-error" : "inspector-value";
-  value.textContent = p.error ? `⚠ ${p.error}` : ` = ${formatValue(p.value)}`;
+  if (truncatable) value.classList.add("expandable");
+  value.textContent = truncate(fullText);
+  if (truncatable) {
+    value.title = `${fullText.length.toLocaleString()} chars — click to expand`;
+    value.addEventListener("click", () => {
+      expanded = !expanded;
+      value.textContent = expanded ? fullText : truncate(fullText);
+    });
+  }
   row.appendChild(value);
+  if (!p.error) {
+    const copy = document.createElement("button");
+    copy.className = "inspector-copy";
+    copy.textContent = "⧉";
+    copy.title = `copy full value (${fullText.length.toLocaleString()} chars)`;
+    copy.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void navigator.clipboard.writeText(fullText.replace(/^ = /, "")).then(() => {
+        copy.textContent = "✓";
+        setTimeout(() => (copy.textContent = "⧉"), 900);
+      });
+    });
+    row.appendChild(copy);
+  }
 
   const badge = document.createElement("span");
   badge.className = `inspector-badge ${p.computed ? "inspector-computed" : "inspector-cached"}`;

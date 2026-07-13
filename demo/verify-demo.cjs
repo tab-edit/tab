@@ -182,6 +182,35 @@ async function startServer() {
     });
     const secondaries = await page.$$eval(".cm-cursor-secondary", (els) => els.filter((e) => getComputedStyle(e).display !== "none").length);
     check(secondaries === 0, `no visible secondary carets (${secondaries})`);
+
+    // ——— inspector: uniform truncation + expand + copy ———
+    await page.evaluate(() => {
+      const doc = view.state.doc.toString();
+      const idx = doc.indexOf("0", doc.indexOf("e|"));
+      view.dispatch({ selection: { anchor: idx + 1, head: idx + 1 } });
+    });
+    await page.waitForTimeout(700);
+    // Force a long STRING value into the pane: compute sectionXml via its button.
+    const computeBtns = await page.$$("#inspector .inspector-compute");
+    for (const b of computeBtns) await b.click();
+    await page.waitForTimeout(700);
+    const lengths = await page.$$eval("#inspector .inspector-value", (els) => els.map((e) => e.textContent.length));
+    check(lengths.length > 0 && lengths.every((n) => n <= 230), `every value truncates uniformly (max ${Math.max(...lengths)})`);
+    const expandable = await page.$("#inspector .inspector-value.expandable");
+    check(!!expandable, "long values are click-expandable");
+    const beforeLen = await expandable.evaluate((e) => e.textContent.length);
+    await expandable.click();
+    const afterLen = await expandable.evaluate((e) => e.textContent.length);
+    check(afterLen > beforeLen, `clicking expands the full value (${beforeLen} → ${afterLen})`);
+    await expandable.click(); // collapse back
+    const copyBtn = await page.evaluateHandle(() =>
+      document.querySelector("#inspector .inspector-value.expandable").parentElement.querySelector(".inspector-copy")
+    );
+    check(!!copyBtn.asElement(), "the long row carries a copy affordance");
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await copyBtn.asElement().click();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    check(clip.length > 230 && !clip.endsWith("…"), `copy writes the FULL untruncated value (${clip.length} chars)`);
     check(collapsed.activity === true, "Activity starts collapsed");
 
     // ——— 3–5. default sizes + full use of the column ———

@@ -610,3 +610,19 @@ details.menu .menu-items button { text-align: left; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Inspector value truncation/expand/copy */
+.inspector-value.expandable { cursor: pointer; }
+.inspector-value.expandable:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+.inspector-copy {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.inspector-row:hover .inspector-copy { opacity: 1; }
+.inspector-copy:hover { color: var(--accent); }
