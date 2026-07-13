@@ -5,6 +5,7 @@ import { minimalSetup } from "codemirror";
 import {
   EditorView,
   crosshairCursor,
+  drawSelection,
   dropCursor,
   keymap,
   lineNumbers,
@@ -14,7 +15,7 @@ import { searchKeymap } from "@codemirror/search";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { SAMPLES } from "./samples.js";
-import { play, type PlaybackHandle } from "./playback.js";
+import { createPlayer } from "./playback.js";
 import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
@@ -125,6 +126,7 @@ const rangeSignature = (ranges: readonly { from: number; to: number }[]): string
 // tablature() itself keeps its defaults off (`false`) — these compartments
 // are the ONLY source of the two behaviors here.
 const columnSelectionCompartment = new Compartment();
+const editableCompartment = new Compartment(); // read-only while playing
 const highlightSelectionCompartment = new Compartment();
 const columnSelectionExtension = rectangularSelection({ eventFilter: (e) => e.detail === 1 });
 const highlightSelectionExtension = selectionNodeHighlight();
@@ -145,10 +147,20 @@ const view = new EditorView({
     // by dash runs, so "similar text" floods the doc on any selection
     // (Stan 2026-07-13). Explicit search (Cmd-F) covers the motif case.
     keymap.of([...searchKeymap, ...lintKeymap]),
-    // View themes beat CM's injected base theme by specificity — plain CSS
-    // in style.css loses to it, which left the caret black-on-dark.
+    // drawSelection EXPLICITLY (don't trust setup bundles): it renders the
+    // caret + selection layer, incl. while unfocused — required for the
+    // playback follow-cursor to be VISIBLE. Themes beat CM's injected base
+    // theme by specificity; plain CSS in style.css loses to it.
+    drawSelection(),
     EditorView.theme(
-      { ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#e8e8e8" } },
+      {
+        ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#e8e8e8" },
+        // one visible caret even in column selections (Stan: no multi-cursors)
+        ".cm-cursor-secondary": { display: "none" },
+        "&.cm-focused .cm-selectionBackground, .cm-selectionBackground": {
+          background: "rgba(91, 157, 250, 0.28)",
+        },
+      },
       { dark: true }
     ),
     tablature({ columnSelection: false, highlightSelection: false }),
@@ -156,7 +168,11 @@ const view = new EditorView({
     highlightSelectionCompartment.of(highlightSelectionExtension),
     lintGutter(),
     flashField,
+    editableCompartment.of(EditorView.editable.of(true)),
     EditorView.updateListener.of((update) => {
+      // An edit while paused invalidates the playback timeline's spans —
+      // stop cleanly instead of playing stale positions.
+      if (update.docChanged && player) stopPlayback();
       if (update.docChanged || update.selectionSet) scheduleRefresh();
     }),
   ],
@@ -192,32 +208,103 @@ samplePicker.addEventListener("change", () => {
   view.focus();
 });
 
-// ——— Playback: ONE selection-aware button (selection → just those
-// sounds; empty selection → the whole doc). Space mirrors it when focus
-// is outside the editor. ———
+// ——— Transport (bottom bar): selection-aware ▶/⏸, scrubbable progress,
+// follow-the-playhead (cursor moves to each sound, selected — Stan), and
+// the editor goes READ-ONLY while playing so playhead spans stay truthful.
 const playButton = document.getElementById("play") as HTMLButtonElement;
-let playing: PlaybackHandle | null = null;
-const setPlayingUi = (on: boolean) => {
-  playButton.textContent = on ? "⏹ stop" : "▶ play";
+const slider = document.getElementById("transport-slider") as HTMLInputElement;
+const timeEl = document.getElementById("transport-time") as HTMLElement;
+const followButton = document.getElementById("follow-playhead") as HTMLButtonElement;
+let player: ReturnType<typeof createPlayer> = null;
+let followPlayhead = true;
+let lastSpanKey = "";
+let raf = 0;
+
+const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const setEditable = (on: boolean) =>
+  view.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(on)) });
+
+const stopPlayback = () => {
+  if (!player) return;
+  player.stop();
+  player = null;
+  cancelAnimationFrame(raf);
+  playButton.textContent = "▶";
+  slider.disabled = true;
+  slider.value = "0";
+  timeEl.textContent = "";
+  setEditable(true);
 };
+
+const tick = () => {
+  if (!player) return;
+  const p = player.progress();
+  slider.value = String(Math.round((p.sec / p.totalSec) * 1000));
+  timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
+  if (followPlayhead && p.span) {
+    const key = `${p.span.from}-${p.span.to}`;
+    if (key !== lastSpanKey) {
+      lastSpanKey = key;
+      view.dispatch({
+        selection: { anchor: p.span.from, head: p.span.to },
+        effects: EditorView.scrollIntoView(p.span.from, { y: "nearest" }),
+      });
+    }
+  }
+  if (p.ended) stopPlayback();
+  else raf = requestAnimationFrame(tick);
+};
+
 const togglePlayback = () => {
-  if (playing) {
-    playing.stop();
-    playing = null;
-    setPlayingUi(false);
+  if (player) {
+    if (player.paused) {
+      player.resume();
+      playButton.textContent = "⏸";
+      setEditable(false);
+      raf = requestAnimationFrame(tick);
+    } else {
+      player.pause();
+      playButton.textContent = "▶";
+      setEditable(true); // paused = editable again; an edit stops playback
+    }
     return;
   }
-  playing = play(view.state, view.state.selection.ranges, () => {
-    playing = null;
-    setPlayingUi(false);
-  });
-  setPlayingUi(playing !== null);
+  player = createPlayer(view.state, view.state.selection.ranges);
+  if (!player) return;
+  playButton.textContent = "⏸";
+  slider.disabled = false;
+  lastSpanKey = "";
+  setEditable(false);
+  view.focus(); // readOnly; focus makes the follow-selection fully visible
+  raf = requestAnimationFrame(tick);
 };
+
 playButton.addEventListener("click", togglePlayback);
+slider.addEventListener("input", () => {
+  if (!player) return;
+  player.seek((Number(slider.value) / 1000) * player.totalSec);
+});
+followButton.addEventListener("click", () => {
+  followPlayhead = !followPlayhead;
+  followButton.classList.toggle("active", followPlayhead);
+});
 document.addEventListener("keydown", (e) => {
-  if (e.code === "Space" && !view.hasFocus && document.activeElement?.tagName !== "INPUT") {
+  // While playing the editor is read-only, so Space is safe EVERYWHERE;
+  // when idle it only triggers outside the editor/input fields.
+  if (
+    e.code === "Space" &&
+    (player !== null || (!view.hasFocus && document.activeElement?.tagName !== "INPUT"))
+  ) {
     e.preventDefault();
     togglePlayback();
+  }
+  if (e.code === "Escape" && player) stopPlayback();
+});
+
+// Menus: close on click-away (native <details> keeps them open otherwise).
+document.addEventListener("click", (e) => {
+  for (const menu of document.querySelectorAll("details.menu[open]")) {
+    if (!menu.contains(e.target as Node)) menu.removeAttribute("open");
   }
 });
 
@@ -228,7 +315,7 @@ const TIPS: readonly string[] = [
   "drag across the tab to select a column: tabs are column-based, so a selection is a time slice across all strings",
   "click any note and the Inspector shows everything computed for it — pitch, timing, measure, and which plugin decided",
   "the Sheet pane re-renders live as you type; toggle it between TAB and standard notation",
-  "Export MIDI plays in any player — or round-trip your tab losslessly through Export then Import MusicXML",
+  "Export MIDI plays in any player; Export/Import MusicXML round-trips the music itself — prose and annotations aren't carried over",
   "prose lives alongside music: add a line like “Tuning: D A D G B e” or “Tempo: 140” above a block and watch it take effect",
   "pick a sample from the dropdown up top — real drum, bass, and guitar tabs, plus a 16th-century lute piece",
 ];
@@ -429,6 +516,12 @@ async function renderSheet(tree: NonNullable<ReturnType<typeof tabTree>>): Promi
   const gen = ++sheetGeneration;
   const xml = musicXml(view.state);
   computeActivity(view.state); // drain export reads out of edit attribution
+  if (!xml.includes("<measure")) {
+    // Nothing renderable (empty/prose-only doc) — OSMD throws on it.
+    sheetStatusEl.hidden = false;
+    sheetStatusEl.textContent = "nothing to render yet — add a tab block";
+    return;
+  }
   try {
     const { xml: renderable, removed } = sanitizeForOsmd(xml, sheetMode);
     await osmd.load(renderable);

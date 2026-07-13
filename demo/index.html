@@ -11,19 +11,28 @@
       <h1>tab-edit</h1>
       <select id="sample-picker" class="sample-picker" title="load a sample tab"></select>
       <div class="actions">
-        <label class="toggle" title="drag selects a column (a time slice across all strings)">
-          <input id="toggle-column-selection" type="checkbox" checked />
-          column select
-        </label>
-        <label class="toggle">
-          <input id="toggle-highlight-selection" type="checkbox" checked />
-          highlight selection
-        </label>
-        <button id="play" title="play the whole tab — or just your selection">▶ play</button>
-        <button id="import-xml">Import MusicXML</button>
+        <details class="menu" id="file-menu">
+          <summary>File</summary>
+          <div class="menu-items">
+            <button id="import-xml">Import MusicXML…</button>
+            <button id="export-xml">Export MusicXML</button>
+            <button id="export-midi">Export MIDI</button>
+          </div>
+        </details>
+        <details class="menu" id="settings-menu">
+          <summary title="editor settings">⚙</summary>
+          <div class="menu-items">
+            <label class="toggle" title="drag selects a column (a time slice across all strings)">
+              <input id="toggle-column-selection" type="checkbox" checked />
+              column select
+            </label>
+            <label class="toggle">
+              <input id="toggle-highlight-selection" type="checkbox" checked />
+              highlight selection
+            </label>
+          </div>
+        </details>
         <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
-        <button id="export-xml">Export MusicXML</button>
-        <button id="export-midi">Export MIDI</button>
       </div>
     </header>
     <main class="layout">
@@ -57,7 +66,15 @@
         </section>
       </aside>
     </main>
-    <footer class="hint" id="tip"></footer>
+    <footer class="statusbar">
+      <div class="transport">
+        <button id="play" title="play the tab — or just your selection (Space)">▶</button>
+        <span id="transport-time" class="transport-time"></span>
+        <input id="transport-slider" class="transport-slider" type="range" min="0" max="1000" value="0" disabled />
+        <button id="follow-playhead" class="follow active" title="follow playback: cursor moves to each sound as it plays">⌖</button>
+      </div>
+      <div class="hint" id="tip"></div>
+    </footer>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

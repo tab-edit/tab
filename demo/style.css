@@ -457,15 +457,6 @@ button:hover {
   display: none;
 }
 
-/* Caret must read against the dark editor (native caret defaults to black;
-   minimalSetup's drawSelection caret follows border-left-color). */
-.cm-content {
-  caret-color: #e8e8e8;
-}
-.cm-cursor,
-.cm-dropCursor {
-  border-left-color: #e8e8e8;
-}
 
 .side-panes .pane.collapsed > h2::before {
   content: "▸ ";
@@ -543,4 +534,79 @@ button:hover {
 .sample-picker optgroup {
   background: #1d2126;
   color: #d6d8da;
+}
+
+/* ——— Topbar menus (File / settings) ——— */
+details.menu { position: relative; }
+details.menu > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  user-select: none;
+}
+details.menu > summary::-webkit-details-marker { display: none; }
+details.menu > summary:hover { border-color: var(--accent); color: var(--accent); }
+details.menu[open] > .menu-items {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  min-width: 190px;
+}
+details.menu .menu-items button { text-align: left; }
+
+/* ——— Status bar: transport line + tip line ——— */
+.statusbar {
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+.transport #play {
+  min-width: 34px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.transport-time {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 78px;
+  text-align: center;
+}
+.transport-slider {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 3px;
+}
+.transport-slider:disabled { opacity: 0.35; }
+.follow {
+  padding: 3px 8px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-color: transparent;
+  background: transparent;
+}
+.follow.active { color: var(--accent); }
+.statusbar .hint {
+  border: none;
+  background: none;
+  padding: 2px 12px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

@@ -97,6 +97,15 @@ async function startServer() {
     );
     check(orphanDividers === 0, "no visible divider under a collapsed pane");
 
+    // ——— topbar: quiet menus instead of button rows ———
+    const topButtons = await page.$$eval(".topbar .actions > button", (els) => els.length);
+    check(topButtons === 0, `no loose buttons in the topbar (got ${topButtons})`);
+    await page.click("#file-menu summary");
+    const fileItems = await page.$$eval("#file-menu .menu-items button", (els) => els.length);
+    check(fileItems === 3, `File menu holds the 3 import/export actions (${fileItems})`);
+    await page.click("body"); // click-away closes
+    check(!(await page.$eval("#file-menu", (el) => el.hasAttribute("open"))), "File menu closes on click-away");
+
     // ——— in-app playback (one selection-aware ▶ button) ———
     const playBtn = await page.$("#play");
     check(!!playBtn, "play button exists in the topbar");
@@ -104,9 +113,12 @@ async function startServer() {
     await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events > 0, { timeout: 5000 });
     const whole = await page.evaluate(() => window.__lastPlayback.events);
     check(whole > 0, `clicking play schedules events for the whole doc (${whole})`);
-    await page.click("#play"); // stop
-    const backToPlay = await page.$eval("#play", (el) => el.textContent.includes("play"));
-    check(backToPlay, "stop returns the button to play");
+    check(await page.$eval("#play", (el) => el.textContent.trim() === "⏸"), "playing shows pause glyph");
+    check(await page.$eval("#transport-slider", (el) => !el.disabled), "slider enabled during playback");
+    check(await page.$eval("#editor .cm-content", (el) => el.getAttribute("contenteditable") === "false"), "editor is read-only while playing");
+    await page.keyboard.press("Escape"); // stop
+    check(await page.$eval("#play", (el) => el.textContent.trim() === "▶"), "Escape stops and restores play glyph");
+    check(await page.$eval("#editor .cm-content", (el) => el.getAttribute("contenteditable") === "true"), "editor editable again after stop");
     // Select just the first measure region and play again — fewer events.
     await page.evaluate(() => {
       const line = view.state.doc.line(4); // first music line of the starter doc
@@ -116,6 +128,16 @@ async function startServer() {
     await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events < 999, { timeout: 5000 });
     const partial = await page.evaluate(() => window.__lastPlayback.events);
     check(partial > 0 && partial < whole, `selection playback plays a subset (${partial} < ${whole})`);
+    await page.keyboard.press("Escape");
+    // Follow-the-playhead: the selection must WALK the text while playing.
+    await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
+    await page.click("#play");
+    await page.waitForTimeout(600);
+    const selA = await page.evaluate(() => view.state.selection.main.from);
+    await page.waitForFunction((a) => view.state.selection.main.from !== a, selA, { timeout: 4000 });
+    const selB = await page.evaluate(() => view.state.selection.main.from);
+    check(selA !== selB && selB > 0, `follow moves the cursor between sounds (${selA} → ${selB})`);
+    await page.keyboard.press("Escape");
 
     // ——— sample picker + rotating tips (first-demo-users features) ———
     const groups = await page.$$eval("#sample-picker optgroup", (els) =>
@@ -131,8 +153,21 @@ async function startServer() {
     check(/^Tip: /.test(tip) && tip.length > 30, `rotating tip is populated (${JSON.stringify(tip.slice(0, 40))}…)`);
 
 
-    const caretColor = await page.$eval(".cm-cursor", (el) => getComputedStyle(el).borderLeftColor).catch(() => "no-caret-el");
-    check(caretColor === "rgb(232, 232, 232)" || caretColor === "no-caret-el", `caret is light via view theme (${caretColor})`);
+    // STRICT (a fallback here once masked a real regression): focus the
+    // editor; the drawn caret must EXIST and be light.
+    await page.evaluate(() => view.focus());
+    await page.waitForSelector(".cm-cursor-primary, .cm-cursor", { state: "attached", timeout: 4000 });
+    const caretColor = await page.$eval(".cm-cursor-primary, .cm-cursor", (el) => getComputedStyle(el).borderLeftColor);
+    check(caretColor === "rgb(232, 232, 232)", `drawn caret exists and is light (${caretColor})`);
+    // Column selection: ranges yes, extra carets no (Stan: no multi-cursors).
+    await page.evaluate(() => {
+      const { EditorSelection } = window.__cmState ?? {};
+      const doc = view.state.doc;
+      const l1 = doc.line(4), l2 = doc.line(6);
+      view.dispatch({ selection: { anchor: l1.from + 3, head: l2.from + 6 } });
+    });
+    const secondaries = await page.$$eval(".cm-cursor-secondary", (els) => els.filter((e) => getComputedStyle(e).display !== "none").length);
+    check(secondaries === 0, `no visible secondary carets (${secondaries})`);
     check(collapsed.activity === true, "Activity starts collapsed");
 
     // ——— 3–5. default sizes + full use of the column ———
@@ -161,19 +196,22 @@ async function startServer() {
       /click .*editor.*computed values/i.test(subtitle),
       `Inspector subtitle states the click→values relationship plainly (got "${subtitle}")`
     );
-    await page.waitForFunction(
-      () =>
-        document.querySelector("#inspector .inspector-teach") ||
-        document.querySelectorAll("#inspector .inspector-row").length > 0
-    );
-    const teachAtLoad = await page.$eval("#inspector", (el) => {
-      const teach = el.querySelector(".inspector-teach");
-      return teach ? teach.textContent : null;
+    // Deterministic trigger: an EMPTY doc has nothing to inspect anywhere,
+    // so the teaching hint MUST show (richer prop catalogs mean position 0
+    // of the starter doc can legitimately have rows now).
+    const savedDoc = await page.evaluate(() => {
+      const d = view.state.doc.toString();
+      view.dispatch({ changes: { from: 0, to: d.length, insert: "" } });
+      return d;
     });
+    await page.waitForSelector("#inspector .inspector-teach", { timeout: 5000 });
+    const teachAtLoad = await page.$eval("#inspector .inspector-teach", (el) => el.textContent);
     check(
-      teachAtLoad !== null && /place the cursor/i.test(teachAtLoad),
-      `teaching hint shows at fresh load / prose cursor (got ${JSON.stringify(teachAtLoad)})`
+      /place the cursor/i.test(teachAtLoad),
+      `teaching hint shows when there is nothing to inspect (got ${JSON.stringify(teachAtLoad)})`
     );
+    await page.evaluate((d) => view.dispatch({ changes: { from: 0, to: 0, insert: d } }), savedDoc);
+    await page.waitForTimeout(400);
 
     // ——— 7. no active-line bar with the cursor in a music line ———
     await page.evaluate(() => {
