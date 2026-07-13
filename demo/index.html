@@ -9,6 +9,7 @@
   <body>
     <header class="topbar">
       <h1>tab-edit</h1>
+      <select id="sample-picker" class="sample-picker" title="load a sample tab"></select>
       <div class="actions">
         <label class="toggle" title="Alt+drag makes a column selection (plain-drag-always breaks double-click word-select, so it stays Alt-gated)">
           <input id="toggle-column-selection" type="checkbox" checked />
@@ -55,10 +56,7 @@
         </section>
       </aside>
     </main>
-    <footer class="hint">
-      Tip: try replacing the doc with <code>e|--3--|\n|-----|\n</code> — implicit
-      line names trigger a fixable warning (click the fix button in Diagnostics).
-    </footer>
+    <footer class="hint" id="tip"></footer>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

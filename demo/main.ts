@@ -13,6 +13,7 @@ import {
 import { searchKeymap } from "@codemirror/search";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
+import { SAMPLES } from "./samples.js";
 import { Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import {
@@ -143,6 +144,12 @@ const view = new EditorView({
     // by dash runs, so "similar text" floods the doc on any selection
     // (Stan 2026-07-13). Explicit search (Cmd-F) covers the motif case.
     keymap.of([...searchKeymap, ...lintKeymap]),
+    // View themes beat CM's injected base theme by specificity — plain CSS
+    // in style.css loses to it, which left the caret black-on-dark.
+    EditorView.theme(
+      { ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#e8e8e8" } },
+      { dark: true }
+    ),
     tablature({ columnSelection: false, highlightSelection: false }),
     columnSelectionCompartment.of(columnSelectionExtension),
     highlightSelectionCompartment.of(highlightSelectionExtension),
@@ -154,6 +161,58 @@ const view = new EditorView({
   ],
   parent: editorHost,
 });
+
+// ——— Sample picker (first demo users): quiet dropdown, grouped by
+// instrument; picking one replaces the whole doc (undoable). The built-in
+// starter doc stays the default. ———
+const samplePicker = document.getElementById("sample-picker") as HTMLSelectElement;
+{
+  const starter = document.createElement("option");
+  starter.value = "__starter";
+  starter.textContent = "samples…";
+  samplePicker.appendChild(starter);
+  SAMPLES.forEach((g, gi) => {
+    const group = document.createElement("optgroup");
+    group.label = g.group;
+    g.items.forEach((item, ii) => {
+      const opt = document.createElement("option");
+      opt.value = `${gi}:${ii}`;
+      opt.textContent = item.label;
+      group.appendChild(opt);
+    });
+    samplePicker.appendChild(group);
+  });
+}
+samplePicker.addEventListener("change", () => {
+  const [gi, ii] = samplePicker.value.split(":").map(Number);
+  const text = SAMPLES[gi]?.items[ii]?.text;
+  if (text === undefined) return;
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+  view.focus();
+});
+
+// ——— Rotating footer tips: genuinely useful, one every 20s (random,
+// never the same twice in a row). ———
+const TIPS: readonly string[] = [
+  "delete the letter at the start of a tab line — the app derives the missing name and Diagnostics offers a one-click fix",
+  "Alt+drag makes a column selection: tabs are column-based, so that selects a time slice across all strings",
+  "click any note and the Inspector shows everything computed for it — pitch, timing, measure, and which plugin decided",
+  "the Sheet pane re-renders live as you type; toggle it between TAB and standard notation",
+  "Export MIDI plays in any player — or round-trip your tab losslessly through Export then Import MusicXML",
+  "prose lives alongside music: add a line like “Tuning: D A D G B e” or “Tempo: 140” above a block and watch it take effect",
+  "pick a sample from the dropdown up top — real drum, bass, and guitar tabs, plus a 16th-century lute piece",
+];
+const tipEl = document.getElementById("tip") as HTMLElement;
+let tipIndex = Math.floor(Math.random() * TIPS.length);
+const showTip = () => {
+  tipEl.textContent = `Tip: ${TIPS[tipIndex]}`;
+};
+showTip();
+setInterval(() => {
+  const next = Math.floor(Math.random() * (TIPS.length - 1));
+  tipIndex = next >= tipIndex ? next + 1 : next;
+  showTip();
+}, 20_000);
 
 // Exposed for console poking and the Playwright verify loop.
 Object.assign(globalThis, { view });

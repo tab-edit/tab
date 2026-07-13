@@ -1,0 +1,29 @@
+# "Backbeat Study" - drum kit tab
+# HH = hi-hat, SD = snare, BD = bass drum, CC = crash, RD = ride
+# x = hit, X = accent/open
+
+# [Basic groove]
+HH|x-x-x-x-x-x-x-x-|x-x-x-x-x-x-x-x-|
+SD|----x-------x---|----x-------x---|
+BD|x-------x-------|x---x---x-------|
+
+# [Verse] ride pattern
+RD|x-x-x-x-x-x-x-x-|x-x-x-x-x-x-x-x-|
+SD|----x-------x---|----x-------x-x-|
+BD|x-------x-x-----|x-------x-x-----|
+
+# [Chorus] open hats, crash accents
+CC|X---------------|X---------------|
+HH|--x-x-X-x-x-x-X-|--x-x-X-x-x-x-X-|
+SD|----x-------x---|----x-------x---|
+BD|x---x---x---x---|x---x---x---x---|
+
+# [Fill] around the kit
+HH|x-x-x-x---------|
+SD|----x---x-x-----|
+BD|x-------------x-|
+
+|--repeat 8x-----|
+HH|x-x-x-x-x-x-x-x-|
+SD|----x-------x---|
+BD|x-------x-------|

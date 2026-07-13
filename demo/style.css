@@ -521,3 +521,26 @@ button:hover {
   font-size: 10px;
   cursor: pointer;
 }
+
+/* Sample picker — quiet: text-like at rest, bordered on hover/focus. */
+.sample-picker {
+  background: transparent;
+  color: #9aa0a6;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  margin-left: 10px;
+  cursor: pointer;
+}
+.sample-picker:hover,
+.sample-picker:focus {
+  border-color: rgba(154, 160, 166, 0.4);
+  outline: none;
+}
+.sample-picker option,
+.sample-picker optgroup {
+  background: #1d2126;
+  color: #d6d8da;
+}

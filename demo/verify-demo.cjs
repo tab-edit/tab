@@ -96,6 +96,21 @@ async function startServer() {
       }).length
     );
     check(orphanDividers === 0, "no visible divider under a collapsed pane");
+
+    // ——— sample picker + rotating tips (first-demo-users features) ———
+    const groups = await page.$$eval("#sample-picker optgroup", (els) =>
+      els.map((el) => `${el.label}:${el.querySelectorAll("option").length}`)
+    );
+    check(groups.length >= 4, `picker has instrument optgroups (${groups.join(", ")})`);
+    const startDoc = await page.evaluate(() => view.state.doc.line(1).text);
+    check(/Demo Song/.test(startDoc), `starter doc stays the default (line 1: ${JSON.stringify(startDoc)})`);
+    await page.selectOption("#sample-picker", "2:1"); // Drums / Tom Sawyer
+    const swapped = await page.evaluate(() => view.state.doc.toString());
+    check(/Tom Sawyer/.test(swapped), "picking a drums sample swaps the doc");
+    const tip = await page.$eval("#tip", (el) => el.textContent || "");
+    check(/^Tip: /.test(tip) && tip.length > 30, `rotating tip is populated (${JSON.stringify(tip.slice(0, 40))}…)`);
+    const caretColor = await page.$eval(".cm-cursor", (el) => getComputedStyle(el).borderLeftColor).catch(() => "no-caret-el");
+    check(caretColor === "rgb(232, 232, 232)" || caretColor === "no-caret-el", `caret is light via view theme (${caretColor})`);
     check(collapsed.activity === true, "Activity starts collapsed");
 
     // ——— 3–5. default sizes + full use of the column ———
