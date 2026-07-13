@@ -152,6 +152,48 @@ async function startServer() {
     const selB = await page.evaluate(() => view.state.selection.main.from);
     check(selA !== selB && selB > 0, `follow moves the cursor between sounds (${selA} → ${selB})`);
     await page.keyboard.press("Escape");
+    // A chord Sound is MULTI-RANGE (one range per line): the playhead must
+    // select it as a column slice, never the flat span (= whole lines).
+    await page.evaluate(() => {
+      const d = view.state.doc.length;
+      view.dispatch({
+        changes: { from: 0, to: d, insert: "Title: Demo Song\nTempo: 60\n\ne|--0--2--3--|\nB|--0-----3--|\n" },
+        selection: { anchor: 0, head: 0 },
+      });
+    });
+    await page.waitForTimeout(600); // reparse
+    await page.click("#play");
+    await page.waitForFunction(() => view.state.selection.ranges.length > 1, { timeout: 5000 });
+    const chordRanges = await page.evaluate(() => view.state.selection.ranges.map((r) => [r.from, r.to]));
+    const singleLine = await page.evaluate(() =>
+      view.state.selection.ranges.every(
+        (r) => view.state.doc.lineAt(r.from).number === view.state.doc.lineAt(r.to).number
+      )
+    );
+    check(chordRanges.length > 1, `a chord playhead selects one range PER LINE (${JSON.stringify(chordRanges)})`);
+    check(singleLine, "each playhead range stays inside its own line (column slice, not whole lines)");
+    // Scrubbing while PAUSED must keep moving the selection (paused spans
+    // never change on their own, so this is an explicit jump on seek).
+    await page.click("#play"); // pause
+    check(await page.$eval("#play", (el) => el.textContent.trim() === "▶"), "pause shows play glyph");
+    await page.waitForTimeout(150);
+    const beforeScrub = await page.evaluate(() => view.state.selection.main.from);
+    await page.$eval("#transport-slider", (el) => {
+      el.value = "900";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const afterScrub = await page.evaluate(() => view.state.selection.main.from);
+    check(afterScrub !== beforeScrub, `scrubbing while paused moves the selection (${beforeScrub} → ${afterScrub})`);
+    // ⌖ while paused: park the cursor away, toggle follow off→on — the ON
+    // click itself must jump the selection back to the playhead.
+    await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
+    await page.click("#follow-playhead"); // off
+    await page.click("#follow-playhead"); // on → forced jump, even paused
+    const jumped = await page.evaluate(() => view.state.selection.main.from);
+    check(jumped === afterScrub, `⌖ jumps the paused selection back to the playhead (0 → ${jumped})`);
+    await page.keyboard.press("Escape");
+    // Clear the (multi-range) playhead selection — later checks inherit it.
+    await page.evaluate(() => view.dispatch({ selection: { anchor: 0, head: 0 } }));
 
     // ——— sample picker + rotating tips (first-demo-users features) ———
     const groups = await page.$$eval("#sample-picker optgroup", (els) =>
@@ -203,9 +245,23 @@ async function startServer() {
     const afterLen = await expandable.evaluate((e) => e.textContent.length);
     check(afterLen > beforeLen, `clicking expands the full value (${beforeLen} → ${afterLen})`);
     await expandable.click(); // collapse back
-    const copyBtn = await page.evaluateHandle(() =>
-      document.querySelector("#inspector .inspector-value.expandable").parentElement.querySelector(".inspector-copy")
-    );
+    // Copy must write the FULL value — test it on the LONGEST expandable row
+    // (row order varies with lint timing; "first expandable" is sometimes the
+    // still-populating diagnostics array, whose full value is short).
+    const copyBtn = await page.evaluateHandle(() => {
+      let best = null;
+      let bestLen = -1;
+      for (const v of document.querySelectorAll("#inspector .inspector-value.expandable")) {
+        const btn = v.parentElement.querySelector(".inspector-copy");
+        const m = btn && /copy full value \(([\d,]+)/.exec(btn.title);
+        const len = m ? Number(m[1].replace(/,/g, "")) : -1;
+        if (len > bestLen) {
+          bestLen = len;
+          best = btn;
+        }
+      }
+      return best;
+    });
     check(!!copyBtn.asElement(), "the long row carries a copy affordance");
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await copyBtn.asElement().click();

@@ -238,25 +238,41 @@ const stopPlayback = () => {
   view.dispatch({ effects: setFlashes.of([]) });
 };
 
+// Selection AND a decoration flash: decorations render regardless of
+// focus/selection-layer subtleties, so the playhead is unmissable. A chord
+// Sound is MULTI-RANGE (one range per line) — select every range as a
+// column slice; its flat from..to would read as whole lines swallowed.
+const applySpans = (spans: readonly { from: number; to: number }[]) => {
+  lastSpanKey = rangeSignature(spans);
+  view.dispatch({
+    selection: EditorSelection.create(spans.map((s) => EditorSelection.range(s.from, s.to))),
+    effects: [
+      EditorView.scrollIntoView(spans[0].from, { y: "center" }),
+      setFlashes.of(spans.map((s) => ({ from: s.from, to: s.to, kind: "state" as const }))),
+    ],
+  });
+};
+
+// Forced follow-jump (⌖ click, slider seek): works while PAUSED, and against
+// wherever the user parked the cursor — compare with the ACTUAL selection,
+// not lastSpanKey (stale the moment the user clicks elsewhere while paused).
+const jumpToPlayhead = () => {
+  if (!player) return;
+  const p = player.progress();
+  if (!p.spans) return;
+  if (rangeSignature(view.state.selection.ranges) !== rangeSignature(p.spans)) {
+    applySpans(p.spans);
+  }
+};
+
 const tick = () => {
   if (!player) return;
   const p = player.progress();
   slider.value = String(Math.round((p.sec / p.totalSec) * 1000));
   timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
-  if (followPlayhead && p.span) {
-    const key = `${p.span.from}-${p.span.to}`;
-    if (key !== lastSpanKey) {
-      lastSpanKey = key;
-      // Selection AND a decoration flash: decorations render regardless of
-      // focus/selection-layer subtleties, so the playhead is unmissable.
-      view.dispatch({
-        selection: { anchor: p.span.from, head: p.span.to },
-        effects: [
-          EditorView.scrollIntoView(p.span.from, { y: "center" }),
-          setFlashes.of([{ from: p.span.from, to: p.span.to, kind: "state" }]),
-        ],
-      });
-    }
+  if (followPlayhead && p.spans) {
+    const key = rangeSignature(p.spans);
+    if (key !== lastSpanKey) applySpans(p.spans);
   }
   if (p.ended) stopPlayback();
   else raf = requestAnimationFrame(tick);
@@ -294,10 +310,14 @@ playButton.addEventListener("click", togglePlayback);
 slider.addEventListener("input", () => {
   if (!player) return;
   player.seek((Number(slider.value) / 1000) * player.totalSec);
+  // Scrubbing while paused: tick's key check never fires (the span doesn't
+  // change on its own) — jump explicitly so the selection tracks the scrub.
+  if (followPlayhead) jumpToPlayhead();
 });
 followButton.addEventListener("click", () => {
   followPlayhead = !followPlayhead;
   followButton.classList.toggle("active", followPlayhead);
+  if (followPlayhead) jumpToPlayhead(); // jump NOW — paused included
 });
 document.addEventListener("keydown", (e) => {
   // While playing the editor is read-only, so Space is safe EVERYWHERE;

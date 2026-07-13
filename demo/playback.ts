@@ -14,13 +14,19 @@ import { readTabProp, tabTree } from "../src/index.js";
 
 const PPQ = 960;
 
+export interface Span {
+  readonly from: number;
+  readonly to: number;
+}
+
 interface TimedEvent {
   readonly atSec: number;
   readonly durSec: number;
   readonly midi: number;
   readonly percussion: boolean;
-  readonly sourceFrom: number;
-  readonly sourceTo: number;
+  /** The source Sound's ranges, one per line (a chord is a column slice —
+   *  its flat from..to would span whole lines of everything in between). */
+  readonly spans: readonly Span[];
 }
 
 export type Timbre = "plucked" | "tone" | "soft";
@@ -28,8 +34,10 @@ export type Timbre = "plucked" | "tone" | "soft";
 export interface PlaybackProgress {
   readonly sec: number;
   readonly totalSec: number;
-  /** Text span of the sound at the playhead (undefined between sounds). */
-  readonly span?: { readonly from: number; readonly to: number };
+  /** Per-line ranges of the sound at the playhead (undefined between
+   *  sounds while playing; while paused, falls forward to the NEXT sound
+   *  so scrubbing always has a target). */
+  readonly spans?: readonly Span[];
   readonly ended: boolean;
 }
 
@@ -88,6 +96,30 @@ export function timeline(
   }
   events = playable;
   if (events.length === 0) return [];
+  // sourceFrom/sourceTo is the Sound's FLAT extent (rangeFrom(0)..rangeTo(last));
+  // for a chord that spans lines, selecting it grabs whole lines. Resolve back
+  // to the Sound node's per-line ranges once per distinct span (a chord emits
+  // several midi events off one Sound). Caret probe at sourceFrom: Sound
+  // ranges are disjoint, so the probe pins the one starting there.
+  const spanCache = new Map<string, readonly Span[]>();
+  const soundSpans = (from: number, to: number): readonly Span[] => {
+    const key = `${from}:${to}`;
+    const hit = spanCache.get(key);
+    if (hit) return hit;
+    const sounds = tree.nodesInRanges([{ from, to: from }], "Sound");
+    const sound = sounds.find((s: TabNode) => s.rangeFrom(0) === from) ?? sounds[0];
+    let spans: Span[];
+    if (sound) {
+      spans = [];
+      for (let i = 0; i < sound.rangeCount; i++) {
+        spans.push({ from: sound.rangeFrom(i), to: sound.rangeTo(i) });
+      }
+    } else {
+      spans = [{ from, to }]; // flat fallback (no Sound at this span)
+    }
+    spanCache.set(key, spans);
+    return spans;
+  };
   const secPerTick = 60 / (bpmOf(state) * PPQ);
   const baseTick = Math.min(...events.map((e: SmfNote) => e.tick));
   return events
@@ -96,8 +128,7 @@ export function timeline(
       durSec: Math.max(0.05, e.durationTicks * secPerTick),
       midi: e.midi,
       percussion: e.percussion === true,
-      sourceFrom: e.sourceFrom ?? 0,
-      sourceTo: e.sourceTo ?? 0,
+      spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
     }))
     .sort((a, b) => a.atSec - b.atSec);
 }
@@ -115,16 +146,30 @@ function pluckBuffer(audio: AudioContext, freq: number, durSec: number): AudioBu
   const hit = pluckCache.get(key);
   if (hit) return hit;
   const period = Math.max(2, Math.round(rate / freq));
-  const length = Math.ceil(rate * (durSec + 0.15));
+  const length = Math.ceil(rate * (durSec + 0.4));
   const buffer = audio.createBuffer(1, length, rate);
   const data = buffer.getChannelData(0);
-  for (let i = 0; i < period; i++) data[i] = Math.random() * 2 - 1;
+  // Soft pick: RAW white noise is the harshness — every partial at full
+  // blast reads as a metal edge on steel. Two one-pole lowpass passes over
+  // the excitation (~2.5 kHz) round it into a fingertip-on-nylon attack.
+  let lp1 = 0;
+  let lp2 = 0;
+  for (let i = 0; i < period; i++) {
+    lp1 = 0.7 * lp1 + 0.3 * (Math.random() * 2 - 1);
+    lp2 = 0.7 * lp2 + 0.3 * lp1;
+    data[i] = lp2;
+  }
   // Pick-position comb: subtracting a delayed copy of the excitation puts
-  // the "pick near the bridge" notch in the spectrum — the guitar attack.
-  const pick = Math.max(1, Math.round(period / 7));
+  // the "picked partway up the string" notch in the spectrum. /5 (not /7):
+  // farther from the bridge = warmer.
+  const pick = Math.max(1, Math.round(period / 5));
   for (let i = period - 1; i >= pick; i--) data[i] -= 0.5 * data[i - pick];
+  // Lowpassing costs energy — renormalize so every note speaks evenly.
+  let peak = 0;
+  for (let i = 0; i < period; i++) peak = Math.max(peak, Math.abs(data[i]));
+  if (peak > 0) for (let i = 0; i < period; i++) data[i] /= peak;
   // Low strings ring longer than high ones (real-instrument decay).
-  const decay = freq < 150 ? 0.999 : freq < 330 ? 0.998 : 0.9965;
+  const decay = freq < 150 ? 0.9992 : freq < 330 ? 0.9985 : 0.997;
   for (let i = period; i < length; i++) {
     data[i] = decay * 0.5 * (data[i - period] + data[i - period + 1]);
   }
@@ -136,9 +181,13 @@ function pluck(audio: AudioContext, master: GainNode, at: number, freq: number, 
   const src = audio.createBufferSource();
   src.buffer = pluckBuffer(audio, freq, dur);
   const out = audio.createGain();
-  out.gain.setValueAtTime(0.3, at);
-  out.gain.setValueAtTime(0.3, at + dur * 0.7);
-  out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.1);
+  // 6 ms fade-in kills the digital click at sample 0; the long exponential
+  // release lets the string ring past the notated duration like a real one
+  // (nothing hard-gates a vibrating string at the next note's onset).
+  out.gain.setValueAtTime(0, at);
+  out.gain.linearRampToValueAtTime(0.25, at + 0.006);
+  out.gain.setValueAtTime(0.25, at + dur * 0.7);
+  out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.35);
   src.connect(out).connect(master);
   src.start(at);
 }
@@ -210,9 +259,27 @@ export function createPlayer(
   limiter.attack.value = 0.002;
   limiter.release.value = 0.15;
   limiter.connect(audio.destination);
+  // Plucked tone shaping (a dry Karplus-Strong string sounds like plastic):
+  // a gentle top-end rolloff tames the remaining fizz and a low-mid peak
+  // stands in for the guitar body's air resonance. `sink` is what every
+  // master gain connects to — rebuild() must route through the same chain.
+  let sink: AudioNode = limiter;
+  if (timbre === "plucked") {
+    const top = audio.createBiquadFilter();
+    top.type = "lowpass";
+    top.frequency.value = 4200;
+    top.Q.value = 0.4;
+    const body = audio.createBiquadFilter();
+    body.type = "peaking";
+    body.frequency.value = 170;
+    body.gain.value = 3;
+    body.Q.value = 0.9;
+    top.connect(body).connect(limiter);
+    sink = top;
+  }
   let master = audio.createGain();
-  master.gain.value = 0.5;
-  master.connect(limiter);
+  master.gain.value = 0.45;
+  master.connect(sink);
 
   let startedAt = audio.currentTime + 0.05; // ctx-time of playback origin
   let offset = 0; // seconds into the piece at `startedAt`
@@ -226,8 +293,8 @@ export function createPlayer(
   const rebuild = (fromSec: number): void => {
     master.disconnect();
     master = audio.createGain();
-    master.gain.value = 0.5;
-    master.connect(limiter);
+    master.gain.value = 0.45;
+    master.connect(sink);
     startedAt = audio.currentTime + 0.02;
     offset = fromSec;
     scheduleFrom(audio, master, events, fromSec, startedAt, timbre);
@@ -257,11 +324,16 @@ export function createPlayer(
     },
     progress(): PlaybackProgress {
       const sec = now();
-      const current = events.find((e) => e.atSec <= sec && sec < e.atSec + e.durSec);
+      // Playing: only a sound actually under the playhead. Paused: fall
+      // forward to the next sound so scrubbing between sounds still gives
+      // the follow-jump a target (what WILL play on resume).
+      const current =
+        events.find((e) => e.atSec <= sec && sec < e.atSec + e.durSec) ??
+        (paused ? events.find((e) => e.atSec >= sec) : undefined);
       return {
         sec,
         totalSec,
-        span: current ? { from: current.sourceFrom, to: current.sourceTo } : undefined,
+        spans: current?.spans,
         ended: !paused && sec >= totalSec,
       };
     },
