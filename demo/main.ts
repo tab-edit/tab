@@ -372,26 +372,70 @@ function formatValue(v: unknown): string {
   return JSON.stringify(v);
 }
 
-function propRow(node: ReturnType<typeof deepestNodeAt>, p: PropInspection): HTMLElement {
+// ——— Inspector: one row per prop, grouped by the OWNING plugin (prop ids
+// are "pluginId/propName"). Filter/collapse state is module-level so it
+// survives re-renders within the session (Stan: filter by plugin, stay
+// uncrowded). Data is collected once per cursor move (buildInspectorData,
+// the only place that reads props) and repainted from that snapshot on
+// every chip/text/collapse interaction (paintInspector) — repainting never
+// re-reads props, so it can't pollute the next edit's Activity report.
+interface InspectorEntry {
+  readonly node: ReturnType<typeof deepestNodeAt>;
+  readonly scope: string;
+  readonly pluginId: string;
+  readonly propName: string;
+  prop: PropInspection; // reassigned in place when a "compute" button fires
+}
+interface InspectorData {
+  readonly shownAny: boolean;
+  readonly warnings: readonly string[];
+  readonly cachedCount: number;
+  readonly evaluatedCount: number;
+  readonly entries: readonly InspectorEntry[];
+  readonly pluginOrder: readonly string[]; // first-appearance order (deepest node first)
+}
+
+let inspectorData: InspectorData | null = null;
+let inspectorPluginFilter: string | null = null;
+let inspectorTextFilter = ""; // raw, as typed; compared lowercase/trimmed
+const inspectorCollapsedGroups = new Set<string>();
+
+/** "pluginId/propName" → the two parts, split on the FIRST slash only —
+ *  propName may itself contain "/" (e.g. nested paths), pluginId never does. */
+function splitPropId(id: string): { pluginId: string; propName: string } {
+  const i = id.indexOf("/");
+  return i === -1 ? { pluginId: "?", propName: id } : { pluginId: id.slice(0, i), propName: id.slice(i + 1) };
+}
+
+function inspectorRow(entry: InspectorEntry): HTMLElement {
   const row = document.createElement("div");
   row.className = "inspector-row";
 
+  const scope = document.createElement("span");
+  scope.className = "inspector-row-scope";
+  scope.textContent = entry.scope;
+  row.appendChild(scope);
+
   const name = document.createElement("span");
   name.className = "inspector-prop";
-  name.textContent = p.id.split("/").pop()!;
-  name.title = `chain (outermost first):\n  ${p.chain.join("\n  ")}`;
+  name.textContent = entry.propName;
+  name.title = `chain (outermost first):\n  ${entry.prop.chain.join("\n  ")}`;
   row.appendChild(name);
 
+  const p = entry.prop;
   if (!p.evaluated) {
     const btn = document.createElement("button");
     btn.className = "inspector-compute";
     btn.textContent = "compute";
     btn.title = "May be expensive (whole-document) — computes on demand.";
     btn.addEventListener("click", () => {
-      const fresh = inspectNode(view.state, node, [p.id]);
+      const fresh = inspectNode(view.state, entry.node, [p.id]);
       computeActivity(view.state); // drain — clicked work stays out of edit reports
       const updated = fresh?.props.find((q) => q.id === p.id);
-      if (updated) row.replaceWith(propRow(node, updated));
+      if (updated) {
+        entry.prop = updated; // keep the snapshot in sync for future repaints
+        row.replaceWith(inspectorRow(entry));
+      }
     });
     row.appendChild(btn);
     return row;
@@ -430,8 +474,83 @@ function propRow(node: ReturnType<typeof deepestNodeAt>, p: PropInspection): HTM
   return row;
 }
 
-function renderInspector(tree: NonNullable<ReturnType<typeof tabTree>>): void {
-  inspectorEl.innerHTML = "";
+function inspectorGroup(pluginId: string, totalCount: number, visible: readonly InspectorEntry[]): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "inspector-group";
+
+  const collapsed = inspectorCollapsedGroups.has(pluginId);
+  const header = document.createElement("div");
+  header.className = "inspector-group-header";
+  const countLabel = visible.length === totalCount ? `${totalCount}` : `${visible.length}/${totalCount}`;
+  header.textContent = `${collapsed ? "▸" : "▾"} ${pluginId} (${countLabel})`;
+  header.addEventListener("click", () => {
+    if (collapsed) inspectorCollapsedGroups.delete(pluginId);
+    else inspectorCollapsedGroups.add(pluginId);
+    paintInspector();
+  });
+  wrap.appendChild(header);
+
+  if (!collapsed) {
+    for (const entry of visible) wrap.appendChild(inspectorRow(entry));
+  }
+  return wrap;
+}
+
+function inspectorFilterBar(data: InspectorData): HTMLElement {
+  const bar = document.createElement("div");
+  bar.className = "inspector-filters";
+
+  const chips = document.createElement("div");
+  chips.className = "inspector-chips";
+
+  const counts = new Map<string, number>();
+  for (const e of data.entries) counts.set(e.pluginId, (counts.get(e.pluginId) ?? 0) + 1);
+
+  const allChip = document.createElement("span");
+  allChip.className = `inspector-chip${inspectorPluginFilter === null ? " active" : ""}`;
+  allChip.textContent = `all (${data.entries.length})`;
+  allChip.addEventListener("click", () => {
+    inspectorPluginFilter = null;
+    paintInspector();
+  });
+  chips.appendChild(allChip);
+
+  for (const pluginId of data.pluginOrder) {
+    const chip = document.createElement("span");
+    chip.className = `inspector-chip${inspectorPluginFilter === pluginId ? " active" : ""}`;
+    chip.textContent = `${pluginId} (${counts.get(pluginId)})`;
+    chip.addEventListener("click", () => {
+      inspectorPluginFilter = inspectorPluginFilter === pluginId ? null : pluginId;
+      paintInspector();
+    });
+    chips.appendChild(chip);
+  }
+  bar.appendChild(chips);
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "inspector-filter-text";
+  input.placeholder = "filter props…";
+  input.value = inspectorTextFilter;
+  input.addEventListener("input", () => {
+    const caret = input.selectionStart;
+    inspectorTextFilter = input.value;
+    paintInspector();
+    // paintInspector() rebuilds the DOM (this input included) — restore
+    // focus + caret so typing a filter doesn't lose the cursor mid-word.
+    const fresh = inspectorEl.querySelector<HTMLInputElement>(".inspector-filter-text");
+    fresh?.focus();
+    if (caret !== null) fresh?.setSelectionRange(caret, caret);
+  });
+  bar.appendChild(input);
+
+  return bar;
+}
+
+/** Collect every prop across the cursor's ancestor chain (deepest first).
+ *  The only function that reads props — chip/text/collapse interactions
+ *  repaint from the result without touching inspectNode again. */
+function buildInspectorData(tree: NonNullable<ReturnType<typeof tabTree>>): void {
   // main.from is INSIDE the selected node (head is its END — one past it).
   const pos = view.state.selection.main.from;
   let start = deepestNodeAt(tree, pos);
@@ -456,56 +575,96 @@ function renderInspector(tree: NonNullable<ReturnType<typeof tabTree>>): void {
   let warnings: readonly string[] = [];
   let cachedCount = 0;
   let evaluatedCount = 0;
-  const groups: { header: HTMLElement; rows: HTMLElement[] }[] = [];
+  const entries: InspectorEntry[] = [];
+  const pluginOrder: string[] = [];
+  const seenPlugins = new Set<string>();
   for (let node: ReturnType<typeof deepestNodeAt> | null = start; node; node = node.parent) {
     const inspection = inspectNode(view.state, node, node.parent !== null);
     if (!inspection) continue;
     warnings = inspection.installWarnings;
     if (inspection.props.length === 0) continue;
+    shownAny = true;
 
-    const header = document.createElement("div");
-    header.className = "inspector-node";
     const ranges: string[] = [];
     for (let i = 0; i < node.rangeCount; i++) {
       ranges.push(`[${node.rangeFrom(i)},${node.rangeTo(i)})`);
     }
-    header.textContent = `${inspection.nodeName} ${ranges.join("+")}`;
-    const rows: HTMLElement[] = [];
+    const scope = `${inspection.nodeName} ${ranges.join("+")}`;
     for (const p of inspection.props) {
       if (p.evaluated) {
         evaluatedCount++;
         if (!p.computed) cachedCount++;
       }
-      rows.push(propRow(node, p));
+      const { pluginId, propName } = splitPropId(p.id);
+      if (!seenPlugins.has(pluginId)) {
+        seenPlugins.add(pluginId);
+        pluginOrder.push(pluginId);
+      }
+      entries.push({ node, scope, pluginId, propName, prop: p });
     }
-    groups.push({ header, rows });
-    shownAny = true;
   }
+  inspectorData = { shownAny, warnings, cachedCount, evaluatedCount, entries, pluginOrder };
+}
 
-  if (shownAny) {
-    const summary = document.createElement("div");
-    summary.className = "activity-summary";
-    summary.title = ACTIVITY_EXPLAIN.propsSummary;
-    summary.textContent = `${cachedCount}/${evaluatedCount} props served from cache`;
-    inspectorEl.appendChild(summary);
-  }
-  for (const g of groups) {
-    inspectorEl.appendChild(g.header);
-    for (const row of g.rows) inspectorEl.appendChild(row);
-  }
-
-  if (!shownAny) {
+/** Pure repaint from `inspectorData` + the current filter/collapse state —
+ *  never reads props, so it's safe to call from chip/text/collapse handlers. */
+function paintInspector(): void {
+  inspectorEl.innerHTML = "";
+  const data = inspectorData;
+  if (!data || !data.shownAny) {
     const none = document.createElement("div");
     none.className = "diag-empty";
     none.textContent = "no props here — move the cursor into a note, measure, or block";
     inspectorEl.appendChild(none);
+    return;
   }
-  for (const w of warnings) {
+
+  inspectorEl.appendChild(inspectorFilterBar(data));
+
+  const summary = document.createElement("div");
+  summary.className = "activity-summary";
+  summary.title = ACTIVITY_EXPLAIN.propsSummary;
+  summary.textContent = `${data.cachedCount}/${data.evaluatedCount} props served from cache`;
+  inspectorEl.appendChild(summary);
+
+  const byPlugin = new Map<string, InspectorEntry[]>();
+  for (const e of data.entries) {
+    (byPlugin.get(e.pluginId) ?? byPlugin.set(e.pluginId, []).get(e.pluginId)!).push(e);
+  }
+  const text = inspectorTextFilter.trim().toLowerCase();
+
+  let renderedAny = false;
+  for (const pluginId of data.pluginOrder) {
+    if (inspectorPluginFilter && inspectorPluginFilter !== pluginId) continue;
+    const all = byPlugin.get(pluginId) ?? [];
+    const visible = text ? all.filter((e) => e.propName.toLowerCase().includes(text)) : all;
+    if (visible.length === 0) continue;
+    renderedAny = true;
+    inspectorEl.appendChild(inspectorGroup(pluginId, all.length, visible));
+  }
+
+  if (!renderedAny) {
+    const empty = document.createElement("div");
+    empty.className = "diag-empty";
+    empty.textContent = text
+      ? `no props match "${inspectorTextFilter.trim()}"`
+      : inspectorPluginFilter
+        ? `no ${inspectorPluginFilter} props at the cursor`
+        : "no props match the current filter";
+    inspectorEl.appendChild(empty);
+  }
+
+  for (const w of data.warnings) {
     const warn = document.createElement("div");
     warn.className = "inspector-warning";
     warn.textContent = `install warning: ${w}`;
     inspectorEl.appendChild(warn);
   }
+}
+
+function renderInspector(tree: NonNullable<ReturnType<typeof tabTree>>): void {
+  buildInspectorData(tree);
+  paintInspector();
 }
 
 function renderActivity(report: ComputeReport): void {

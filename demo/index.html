@@ -27,23 +27,7 @@
     <main class="layout">
       <section id="editor" class="pane editor-pane"></section>
       <aside class="side-panes">
-        <section class="pane">
-          <h2>AST</h2>
-          <div id="ast" class="pane-body ast-body"></div>
-        </section>
-        <section class="pane">
-          <h2>Diagnostics</h2>
-          <div id="diagnostics" class="pane-body diagnostics-body"></div>
-        </section>
-        <section class="pane">
-          <h2>Inspector <span class="pane-sub">props at the cursor: value · who could shape it · who ran</span></h2>
-          <div id="inspector" class="pane-body inspector-body"></div>
-        </section>
-        <section class="pane">
-          <h2>Activity <span class="pane-sub">what actually computed since the last refresh</span></h2>
-          <div id="activity" class="pane-body activity-body"></div>
-        </section>
-        <section class="pane">
+        <section class="pane pane-sheet">
           <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
           <div id="sheet" class="pane-body sheet-body">
             <div class="sheet-controls">
@@ -52,6 +36,22 @@
             <div id="sheet-status" class="sheet-status" hidden></div>
             <div id="sheet-score"></div>
           </div>
+        </section>
+        <section class="pane pane-ast">
+          <h2>AST</h2>
+          <div id="ast" class="pane-body ast-body"></div>
+        </section>
+        <section class="pane pane-inspector">
+          <h2>Inspector <span class="pane-sub">props at the cursor: value · who could shape it · who ran</span></h2>
+          <div id="inspector" class="pane-body inspector-body"></div>
+        </section>
+        <section class="pane pane-diagnostics">
+          <h2>Diagnostics</h2>
+          <div id="diagnostics" class="pane-body diagnostics-body"></div>
+        </section>
+        <section class="pane pane-activity collapsed">
+          <h2>Activity <span class="pane-sub">what actually computed since the last refresh</span></h2>
+          <div id="activity" class="pane-body activity-body"></div>
         </section>
       </aside>
     </main>

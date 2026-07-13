@@ -263,12 +263,64 @@ button:hover {
 
 /* ——— Inspector pane ——— */
 
-.inspector-node {
-  padding: 6px 4px;
-  font-family: monospace;
-  font-size: 12px;
-  font-weight: bold;
+.inspector-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
   border-bottom: 1px solid var(--border);
+}
+
+.inspector-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.inspector-chip {
+  font-size: 9px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.inspector-chip:hover {
+  color: var(--text);
+}
+
+.inspector-chip.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.inspector-filter-text {
+  flex: 1;
+  min-width: 90px;
+  font: inherit;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.inspector-group-header {
+  padding: 5px 4px;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: bold;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.inspector-group-header:hover {
+  color: var(--text);
 }
 
 .inspector-row {
@@ -276,6 +328,12 @@ button:hover {
   font-family: monospace;
   font-size: 11px;
   border-bottom: 1px solid var(--border);
+}
+
+.inspector-row-scope {
+  margin-right: 6px;
+  font-weight: normal;
+  opacity: 0.55;
 }
 
 .inspector-prop { font-weight: bold; }
@@ -341,10 +399,22 @@ button:hover {
 
 .side-panes .pane {
   flex: 0 0 auto;
-  height: 24%;
+  height: 18%;
   min-height: 34px;
   resize: vertical;
   overflow: hidden;
+}
+
+/* Sheet leads the column, expanded generously by default (Stan: don't
+   make me resize the render pane every time) — the rest split the
+   remainder at modest heights. */
+.side-panes .pane-sheet {
+  height: 55%;
+}
+.side-panes .pane-ast,
+.side-panes .pane-inspector,
+.side-panes .pane-diagnostics {
+  height: 18%;
 }
 
 .side-panes .pane > h2 {
