@@ -116,14 +116,17 @@ function pluck(audio: AudioContext, master: GainNode, at: number, freq: number, 
   delay.delayTime.value = period;
   const damp = audio.createBiquadFilter();
   damp.type = "lowpass";
-  damp.frequency.value = Math.min(12000, freq * 14);
+  damp.frequency.value = Math.min(9000, freq * 12);
+  damp.Q.value = 0.0001; // NO resonance: a peak >1 makes the loop gain
+  // exceed unity and the string EXPLODES instead of decaying (found the
+  // hard way — deafening runaway on the starter doc).
   const feedback = audio.createGain();
-  feedback.gain.value = 0.985; // natural string decay; envelope below ends the note
+  feedback.gain.value = 0.955; // decay margin well under unity
   src.connect(delay);
   delay.connect(damp).connect(feedback).connect(delay);
   const out = audio.createGain();
-  out.gain.setValueAtTime(0.35, at);
-  out.gain.setValueAtTime(0.35, at + dur * 0.6);
+  out.gain.setValueAtTime(0.22, at);
+  out.gain.setValueAtTime(0.22, at + dur * 0.6);
   out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.08);
   delay.connect(out).connect(master);
   src.start(at);
@@ -188,9 +191,18 @@ export function createPlayer(
   ctx ??= new AudioContext();
   const audio = ctx;
   void audio.resume();
+  // Safety limiter: NOTHING reaches the ears unclamped (polyphony sums and
+  // any future synth bug hit this before the destination).
+  const limiter = audio.createDynamicsCompressor();
+  limiter.threshold.value = -12;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.15;
+  limiter.connect(audio.destination);
   let master = audio.createGain();
   master.gain.value = 0.5;
-  master.connect(audio.destination);
+  master.connect(limiter);
 
   let startedAt = audio.currentTime + 0.05; // ctx-time of playback origin
   let offset = 0; // seconds into the piece at `startedAt`
@@ -205,7 +217,7 @@ export function createPlayer(
     master.disconnect();
     master = audio.createGain();
     master.gain.value = 0.5;
-    master.connect(audio.destination);
+    master.connect(limiter);
     startedAt = audio.currentTime + 0.02;
     offset = fromSec;
     scheduleFrom(audio, master, events, fromSec, startedAt, timbre);
