@@ -8,6 +8,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { measureNumber, noteSound } from "@tab-edit/plugins";
 import {
   directiveAnnotationRanges,
+  recededLineStarts,
   computeActivity,
   inspectNode,
   midiFile,
@@ -300,4 +301,27 @@ test("directive annotations: recognized Key: value lines expose absolute spans +
   expect(doc.slice(ranges[1].from, ranges[1].to)).toBe("Tempo: 120");
   // Music lines never annotate.
   expect(ranges.every((r) => r.to <= doc.indexOf("e|"))).toBe(true);
+});
+
+test("kind styling: prose and comments recede, music and directives keep full strength", () => {
+  const doc = [
+    "Title: Demo Song", // directive block — NOT receded (load-bearing)
+    "",
+    "e|--1--2--|",
+    "B|--3--0--|",
+    "",
+    "these are just words, flowing like a river all the way home",
+    "and one more line of them to make it unmistakably prose",
+    "",
+    "# a comment line",
+  ].join("\n");
+  const state = stateOf(doc);
+  const receded = recededLineStarts(state);
+  const lineOf = (text: string) => doc.indexOf(text) - 0;
+  expect(receded).toContain(lineOf("these are just words"));
+  expect(receded).toContain(lineOf("and one more line"));
+  expect(receded).toContain(lineOf("# a comment line"));
+  expect(receded).not.toContain(lineOf("Title: Demo Song"));
+  expect(receded).not.toContain(lineOf("e|--1--2--|"));
+  expect(receded).not.toContain(lineOf("B|--3--0--|"));
 });

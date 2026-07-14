@@ -9,7 +9,8 @@
 import { LanguageSupport } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { rectangularSelection } from "@codemirror/view";
-import { directiveAnnotations, selectionNodeHighlight, soundHighlight } from "./decorations.js";
+import { directiveAnnotations, kindStyling, selectionNodeHighlight, soundHighlight } from "./decorations.js";
+import { tabHighlighting } from "./highlight.js";
 import { tabLanguage } from "./language.js";
 import { tabLint } from "./lint.js";
 
@@ -37,14 +38,22 @@ export interface TablatureOptions {
   /** Dotted-underline + hover on recognized `Key: value` directives —
    *  quiet feedback for what the system picked up (default on). */
   readonly annotateDirectives?: boolean;
+  /** The adapter's own deliberate token colors (default on) — do not rely
+   *  on host fallback highlight styles. */
+  readonly tokenColors?: boolean;
+  /** Kind-driven line styling: prose/comments recede like comments in a
+   *  code editor; music keeps the color budget (default on). */
+  readonly kindStyling?: boolean;
 }
 
 /** The complete tablature editing system as one extension. */
 export function tablature(options: TablatureOptions = {}): Extension {
   const extras: Extension[] = [];
   if (options.lint !== false) extras.push(tabLint());
+  if (options.tokenColors !== false) extras.push(tabHighlighting());
   if (options.highlightSounds !== false) extras.push(soundHighlight());
   if (options.annotateDirectives !== false) extras.push(directiveAnnotations());
+  if (options.kindStyling !== false) extras.push(kindStyling());
   if (options.highlightSelection !== false) extras.push(selectionNodeHighlight());
   if (options.multipleSelections !== false) {
     extras.push(EditorState.allowMultipleSelections.of(true));
@@ -73,11 +82,14 @@ export type {
   TraceStep,
 } from "./state-layer.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
+export { tabHighlighting } from "./highlight.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
 export { importMusicXml, midiFile, musicXml } from "./export.js";
 export {
   directiveAnnotationRanges,
   directiveAnnotations,
+  kindStyling,
+  recededLineStarts,
   selectedNodeHighlightRanges,
   selectionNodeHighlight,
   soundHighlight,

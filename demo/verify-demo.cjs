@@ -326,6 +326,46 @@ async function startServer() {
       directiveMarks.some((t) => t && /directive: /.test(t)),
       `annotation hover shows the parsed directive (${JSON.stringify(directiveMarks[0])})`
     );
+    // Deliberate token colors — highlighting broke SILENTLY once (nothing
+    // asserted it); this is the regression net.
+    const tokenStats = await page.evaluate(() => {
+      const spans = [...document.querySelectorAll("#editor .cm-content span")].filter((s) =>
+        [...s.classList].some((c) => c.startsWith("ͼ"))
+      );
+      return { count: spans.length, colors: new Set(spans.map((s) => getComputedStyle(s).color)).size };
+    });
+    check(
+      tokenStats.count > 10 && tokenStats.colors >= 3,
+      `token highlighting renders (${tokenStats.count} spans, ${tokenStats.colors} colors)`
+    );
+    // Kind-driven recession: prose dims like a comment, music keeps the
+    // color budget.
+    const preLen = await page.evaluate(() => view.state.doc.length);
+    await page.evaluate(() =>
+      view.dispatch({
+        changes: {
+          from: view.state.doc.length,
+          insert: "\n\nplain words paragraph to check prose recession\nmore plain words follow here\n",
+        },
+      })
+    );
+    await page.waitForTimeout(900);
+    const recede = await page.evaluate(() => {
+      const prose = document.querySelector("#editor .cm-line.cm-tabProse");
+      const music = [...document.querySelectorAll("#editor .cm-line")].find(
+        (l) => /\|/.test(l.textContent) && !l.classList.contains("cm-tabProse")
+      );
+      return {
+        prose: prose && getComputedStyle(prose).color,
+        music: music && getComputedStyle(music).color,
+      };
+    });
+    check(
+      !!recede.prose && !!recede.music && recede.prose !== recede.music,
+      `prose recedes while music keeps full strength (${recede.prose} vs ${recede.music})`
+    );
+    await page.evaluate((n) => view.dispatch({ changes: { from: n, to: view.state.doc.length } }), preLen);
+    await page.waitForTimeout(400);
     // Column selection: ranges yes, extra carets no (Stan: no multi-cursors).
     await page.evaluate(() => {
       const { EditorSelection } = window.__cmState ?? {};

@@ -5,7 +5,7 @@
 
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { EditorState, Extension } from "@codemirror/state";
-import { directiveEntries } from "@tab-edit/plugins";
+import { blockKind, directiveEntries, segmentKind } from "@tab-edit/plugins";
 import { tabTree } from "./language.js";
 import { readTabProp } from "./state-layer.js";
 
@@ -191,4 +191,93 @@ const directiveAnnotationTheme = EditorView.baseTheme({
 /** Recognized-directive annotations extension for `tablature()`. */
 export function directiveAnnotations(): Extension {
   return [directiveAnnotationPlugin, directiveAnnotationTheme];
+}
+
+/** Pure core (headless-testable): line starts that should render RECEDED
+ *  (.cm-tabProse): lines of prose-kind blocks, whole prose sections
+ *  (covers ownerless skipped rows), and #-comment lines. Music untouched;
+ *  DIRECTIVE blocks stay full strength — they are load-bearing config.
+ *  Driven by the CLAIM verdicts (blockKind/segmentKind), so a pack that
+ *  re-claims a block — or the user's `kind:` escape hatch — restyles it
+ *  automatically: plugin-level presentation via the claims algebra. */
+export function recededLineStarts(state: EditorState): number[] {
+  const tree = tabTree(state);
+  if (!tree) return [];
+  const doc = state.doc;
+  const starts = new Set<number>();
+  const addSpan = (from: number, to: number): void => {
+    let pos = Math.min(from, doc.length);
+    // Node ranges include the trailing newline — treat `to` as EXCLUSIVE
+    // of the line that merely STARTS there (found-by-test: the section
+    // ending at 18 dimmed the music line beginning at 18).
+    const end = Math.min(to, doc.length);
+    while (pos < end) {
+      const line = doc.lineAt(pos);
+      starts.add(line.from);
+      if (line.to >= end) break;
+      pos = line.to + 1;
+    }
+  };
+  for (const section of tree.topNode.getChildren("Section")) {
+    if (readTabProp(state, segmentKind, section) === "prose") {
+      addSpan(section.rangeFrom(0), section.rangeTo(section.rangeCount - 1));
+      continue;
+    }
+    for (const block of section.getChildren("Block")) {
+      if (readTabProp(state, blockKind, block) !== "prose") continue;
+      for (let i = 0; i < block.rangeCount; i++) {
+        addSpan(block.rangeFrom(i), block.rangeTo(i));
+      }
+    }
+  }
+  for (const comment of tree.topNode.getChildren("Comment")) {
+    addSpan(comment.rangeFrom(0), comment.rangeTo(comment.rangeCount - 1));
+  }
+  // A line the system RECOGNIZED as a directive never recedes — it is
+  // load-bearing config even when its block reads prose (the tokenizer
+  // splits bare "Title: Demo Song" lines into prose fragments; the
+  // directive-entry scan still sees the whole line). Keeps the dotted
+  // underline and full strength consistent with each other.
+  for (const r of directiveAnnotationRanges(state)) {
+    starts.delete(doc.lineAt(r.from).from);
+  }
+  return [...starts].sort((a, b) => a - b);
+}
+
+const prosLine = Decoration.line({ class: "cm-tabProse" });
+
+const kindStylingPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.build(view.state);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.build(update.state);
+      }
+    }
+
+    private build(state: EditorState): DecorationSet {
+      return Decoration.set(recededLineStarts(state).map((pos) => prosLine.range(pos)));
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+// Prose recedes the way comments do in every serious editor: ONE perceptual
+// move (brightness hierarchy) applied by MEANING. The single dim color also
+// neutralizes token hues inside (higher specificity than highlight classes)
+// — prose is literally not syntax-highlighted. No backgrounds, no italics,
+// no size changes, no widgets: columns and quietness stay sacred.
+const kindStylingTheme = EditorView.baseTheme({
+  "&dark .cm-tabProse, &dark .cm-tabProse span": { color: "#7d8590" },
+  "&light .cm-tabProse, &light .cm-tabProse span": { color: "#9ba1a8" },
+});
+
+/** Kind-driven line styling (prose recession) for `tablature()`. */
+export function kindStyling(): Extension {
+  return [kindStylingPlugin, kindStylingTheme];
 }
