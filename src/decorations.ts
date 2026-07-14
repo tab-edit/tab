@@ -5,7 +5,9 @@
 
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { EditorState, Extension } from "@codemirror/state";
+import { directiveEntries } from "@tab-edit/plugins";
 import { tabTree } from "./language.js";
+import { readTabProp } from "./state-layer.js";
 
 /** Pure core (headless-testable): ranges of the Sound at the main cursor. */
 export function soundRangesAtCursor(state: EditorState): { from: number; to: number }[] {
@@ -126,4 +128,67 @@ const selectionNodeHighlightTheme = EditorView.baseTheme({
  *  and Measure the current (possibly column/rectangular) selection touches. */
 export function selectionNodeHighlight(): Extension {
   return [selectionNodeHighlightPlugin, selectionNodeHighlightTheme];
+}
+
+/** Pure core (headless-testable): absolute spans of every recognized
+ *  directive (key start → value end), read from the directiveEntries
+ *  evidence prop — the adapter never re-derives parsing. */
+export function directiveAnnotationRanges(
+  state: EditorState
+): { from: number; to: number; key: string; value: string }[] {
+  const tree = tabTree(state);
+  if (!tree) return [];
+  const top = tree.topNode;
+  const out: { from: number; to: number; key: string; value: string }[] = [];
+  for (const node of [...top.getChildren("Section"), ...top.getChildren("Comment")]) {
+    const base = node.rangeFrom(0);
+    for (const e of readTabProp(state, directiveEntries, node)) {
+      out.push({ from: base + e.from, to: base + e.to, key: e.key, value: e.value });
+    }
+  }
+  return out.sort((a, b) => a.from - b.from);
+}
+
+const directiveAnnotationPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.build(view.state);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = this.build(update.state);
+      }
+    }
+
+    private build(state: EditorState): DecorationSet {
+      return Decoration.set(
+        directiveAnnotationRanges(state)
+          .filter((r) => r.to > r.from)
+          .map((r) =>
+            Decoration.mark({
+              class: "cm-tabDirective",
+              attributes: { title: `directive: ${r.key} = ${r.value}` },
+            }).range(r.from, r.to)
+          ),
+        true
+      );
+    }
+  },
+  { decorations: (v) => v.decorations }
+);
+
+// Quiet on purpose (Stan 2026-07-14): style EXISTING characters only —
+// widgets/inlays would shift visual columns, sacrilege in a column-based
+// notation. A dotted underline + native hover title says "picked up:
+// tempo = 120" without shouting.
+const directiveAnnotationTheme = EditorView.baseTheme({
+  ".cm-tabDirective": { borderBottom: "1px dotted #7f9fcf99" },
+});
+
+/** Recognized-directive annotations extension for `tablature()`. */
+export function directiveAnnotations(): Extension {
+  return [directiveAnnotationPlugin, directiveAnnotationTheme];
 }

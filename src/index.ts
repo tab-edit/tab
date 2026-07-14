@@ -9,7 +9,7 @@
 import { LanguageSupport } from "@codemirror/language";
 import { EditorState, type Extension } from "@codemirror/state";
 import { rectangularSelection } from "@codemirror/view";
-import { selectionNodeHighlight, soundHighlight } from "./decorations.js";
+import { directiveAnnotations, selectionNodeHighlight, soundHighlight } from "./decorations.js";
 import { tabLanguage } from "./language.js";
 import { tabLint } from "./lint.js";
 
@@ -34,6 +34,9 @@ export interface TablatureOptions {
    *  (detail >= 2) fall through to native word/line select untouched.
    *  Set false for CM's stock Alt-drag-only rectangular selection. */
   readonly columnSelection?: boolean;
+  /** Dotted-underline + hover on recognized `Key: value` directives —
+   *  quiet feedback for what the system picked up (default on). */
+  readonly annotateDirectives?: boolean;
 }
 
 /** The complete tablature editing system as one extension. */
@@ -41,6 +44,7 @@ export function tablature(options: TablatureOptions = {}): Extension {
   const extras: Extension[] = [];
   if (options.lint !== false) extras.push(tabLint());
   if (options.highlightSounds !== false) extras.push(soundHighlight());
+  if (options.annotateDirectives !== false) extras.push(directiveAnnotations());
   if (options.highlightSelection !== false) extras.push(selectionNodeHighlight());
   if (options.multipleSelections !== false) {
     extras.push(EditorState.allowMultipleSelections.of(true));
@@ -72,6 +76,8 @@ export { tabDiagnostics, tabLint } from "./lint.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
 export { importMusicXml, midiFile, musicXml } from "./export.js";
 export {
+  directiveAnnotationRanges,
+  directiveAnnotations,
   selectedNodeHighlightRanges,
   selectionNodeHighlight,
   soundHighlight,

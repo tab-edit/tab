@@ -7,6 +7,7 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { measureNumber, noteSound } from "@tab-edit/plugins";
 import {
+  directiveAnnotationRanges,
   computeActivity,
   inspectNode,
   midiFile,
@@ -283,4 +284,20 @@ test("MusicXML import command in the editor: musicXml → importMusicXml → the
       )
       .sort((a, b) => a - b);
   expect(midisOf(sections[2])).toEqual(midisOf(sections[0]));
+});
+
+test("directive annotations: recognized Key: value lines expose absolute spans + parsed values", () => {
+  // Quiet-feedback surface (Stan 2026-07-14): the editor underlines what
+  // the system picked up as directives, reading the directiveEntries
+  // evidence prop — never re-deriving parsing in the adapter.
+  const doc = "Title: Demo Song\nTempo: 120\n\ne|--1--2--|\nB|--3--0--|\n";
+  const state = stateOf(doc);
+  const ranges = directiveAnnotationRanges(state);
+  expect(ranges.map((r) => ({ key: r.key, value: r.value }))).toEqual([
+    { key: "title", value: "Demo Song" },
+    { key: "tempo", value: "120" },
+  ]);
+  expect(doc.slice(ranges[1].from, ranges[1].to)).toBe("Tempo: 120");
+  // Music lines never annotate.
+  expect(ranges.every((r) => r.to <= doc.indexOf("e|"))).toBe(true);
 });

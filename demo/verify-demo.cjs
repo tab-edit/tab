@@ -316,6 +316,16 @@ async function startServer() {
     await page.waitForSelector(".cm-cursor-primary, .cm-cursor", { state: "attached", timeout: 4000 });
     const caretColor = await page.$eval(".cm-cursor-primary, .cm-cursor", (el) => getComputedStyle(el).borderLeftColor);
     check(caretColor === "rgb(232, 232, 232)", `drawn caret exists and is light (${caretColor})`);
+    // Quiet directive annotations: recognized Key: value lines carry a
+    // dotted underline + hover title with the PARSED key/value.
+    const directiveMarks = await page.$$eval(".cm-tabDirective", (els) =>
+      els.map((el) => el.getAttribute("title"))
+    );
+    check(directiveMarks.length >= 1, `recognized directives are annotated (${directiveMarks.length} marks)`);
+    check(
+      directiveMarks.some((t) => t && /directive: /.test(t)),
+      `annotation hover shows the parsed directive (${JSON.stringify(directiveMarks[0])})`
+    );
     // Column selection: ranges yes, extra carets no (Stan: no multi-cursors).
     await page.evaluate(() => {
       const { EditorSelection } = window.__cmState ?? {};
