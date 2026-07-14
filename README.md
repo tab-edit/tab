@@ -29,4 +29,39 @@ midiOfSelection(view.state); // → events for the (column) selection
   BY IDENTITY and its semantic values through proven carry gates (no stale state,
   by theorem — see the workspace ADRs).
 
+## Theming (theme packs)
+
+The editor's look is data. A theme pack is a `TabThemeSpec` — one flat record of
+this editor's semantic color slots (`fret`, `lineName`, `technique`, `lattice`,
+`prose`, …) — compiled by `tabTheme()` into a CM extension:
+
+```ts
+import { tabTheme, tablature, type TabThemeSpec } from "@tab-edit/cm";
+
+const midnight: TabThemeSpec = {
+  dark: true,
+  colors: {
+    lattice: "#6a7280", fret: "#bfd3ee", lineName: "#9fb3ba",
+    technique: "#c2a884", embellishment: "#afa8c9", modifier: "#c2a884",
+    scaffold: "#868d99", comment: "#7d8590", prose: "#7d8590",
+    directiveUnderline: "#5b9dfa73", directiveText: "#d7dbe0",
+  },
+};
+
+new EditorView({ extensions: [basicSetup, tablature({ theme: tabTheme(midnight) })] });
+```
+
+Publish the spec (or the compiled extension) as an npm package and it installs like
+any VS Code theme. Two design rules the defaults encode: ~70% of tab characters are
+dash/barline **lattice**, so the theme dims untagged content and lets tagged tokens
+carry brightness (notes pop by contrast, not by rainbow); and hue stays desaturated
+so the editor matches restrained host UIs.
+
+**No-JS channel**: every slot is also a CSS variable — hosts can retheme with plain
+CSS, no code:
+
+```css
+.cm-editor { --tabedit-fret: #ffd9a0; --tabedit-lattice: #5f6672; }
+```
+
 Headless-tested against real `@codemirror/state`/`@codemirror/language` machinery.

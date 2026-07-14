@@ -41,6 +41,9 @@ export interface TablatureOptions {
   /** The adapter's own deliberate token colors (default on) — do not rely
    *  on host fallback highlight styles. */
   readonly tokenColors?: boolean;
+  /** An installed theme pack (compile one from a TabThemeSpec via
+   *  `tabTheme()`); replaces the default themes entirely. */
+  readonly theme?: Extension;
   /** Kind-driven line styling: prose/comments recede like comments in a
    *  code editor; music keeps the color budget (default on). */
   readonly kindStyling?: boolean;
@@ -50,7 +53,8 @@ export interface TablatureOptions {
 export function tablature(options: TablatureOptions = {}): Extension {
   const extras: Extension[] = [];
   if (options.lint !== false) extras.push(tabLint());
-  if (options.tokenColors !== false) extras.push(tabHighlighting());
+  if (options.theme) extras.push(options.theme);
+  else if (options.tokenColors !== false) extras.push(tabHighlighting());
   if (options.highlightSounds !== false) extras.push(soundHighlight());
   if (options.annotateDirectives !== false) extras.push(directiveAnnotations());
   if (options.kindStyling !== false) extras.push(kindStyling());
@@ -82,7 +86,13 @@ export type {
   TraceStep,
 } from "./state-layer.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
-export { tabHighlighting } from "./highlight.js";
+export {
+  defaultDarkTabTheme,
+  defaultLightTabTheme,
+  tabHighlighting,
+  tabTheme,
+} from "./highlight.js";
+export type { TabThemeSpec } from "./highlight.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
 export { importMusicXml, midiFile, musicXml } from "./export.js";
 export {
