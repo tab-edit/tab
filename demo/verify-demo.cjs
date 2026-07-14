@@ -128,8 +128,14 @@ async function startServer() {
     check(await page.$eval("#editor .cm-content", (el) => el.getAttribute("contenteditable") === "true"), "editor editable again after stop");
     // Select just the first measure region and play again — fewer events.
     await page.evaluate(() => {
-      const line = view.state.doc.line(4); // first music line of the starter doc
-      view.dispatch({ selection: { anchor: line.from, head: line.from + 8 } });
+      // First tab line of the starter, found dynamically (starter is a
+      // real wild file — line numbers are not a contract).
+      const doc = view.state.doc;
+      let line = null;
+      for (let n = 1; n <= doc.lines; n++) {
+        if (/^[A-Ga-g][b#]? ?\|-/.test(doc.line(n).text)) { line = doc.line(n); break; }
+      }
+      view.dispatch({ selection: { anchor: line.from, head: line.from + 20 } });
     });
     await page.click("#play");
     await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events < 999, { timeout: 5000 });
@@ -151,7 +157,7 @@ async function startServer() {
     const satieTime = await page.$eval("#transport-time", (el) => el.textContent);
     check(!satieTime.includes("-"), `elapsed time never negative (${satieTime})`);
     await page.keyboard.press("Escape");
-    await page.evaluate(() => { const d = view.state.doc.length; view.dispatch({ changes: { from: 0, to: d, insert: "Title: Demo Song\nTempo: 100\n\ne|--0--2--3--|--2--0-----|\nB|3--------0-|-----3--1--|\n" } }); });
+    await page.evaluate(() => { const d = view.state.doc.length; view.dispatch({ changes: { from: 0, to: d, insert: "Title: House of the Rising Sun\nTempo: 100\n\ne|--0--2--3--|--2--0-----|\nB|3--------0-|-----3--1--|\n" } }); });
     await page.waitForTimeout(600);
     await page.keyboard.press("Escape");
     // Follow-the-playhead: the selection must WALK the text while playing.
@@ -168,7 +174,7 @@ async function startServer() {
     await page.evaluate(() => {
       const d = view.state.doc.length;
       view.dispatch({
-        changes: { from: 0, to: d, insert: "Title: Demo Song\nTempo: 60\n\ne|--0--2--3--|\nB|--0-----3--|\n" },
+        changes: { from: 0, to: d, insert: "Title: House of the Rising Sun\nTempo: 60\n\ne|--0--2--3--|\nB|--0-----3--|\n" },
         selection: { anchor: 0, head: 0 },
       });
     });
@@ -299,7 +305,7 @@ async function startServer() {
     );
     check(groups.length >= 4, `picker has instrument optgroups (${groups.join(", ")})`);
     const startDoc = await page.evaluate(() => view.state.doc.line(1).text);
-    check(/Demo Song/.test(startDoc), `starter doc stays the default (line 1: ${JSON.stringify(startDoc)})`);
+    check(/House Of The Rising Sun/i.test(startDoc), `starter doc stays the default (line 1: ${JSON.stringify(startDoc)})`);
     await page.selectOption("#sample-picker", "2:1"); // Drums / Tom Sawyer
     const swapped = await page.evaluate(() => view.state.doc.toString());
     check(/Tom Sawyer/.test(swapped), "picking a drums sample swaps the doc");

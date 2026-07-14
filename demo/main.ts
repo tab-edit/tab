@@ -32,14 +32,13 @@ import {
   type PropInspection,
 } from "../src/index.js";
 
-const INITIAL_DOC =
-  "Title: Demo Song\nTempo: 100\n\n" +
-  "e|--0--2--3--|--2--0-----|\n" +
-  "B|3--------0-|-----3--1--|\n" +
-  "G|-----------|-----------|\n" +
-  "D|-----------|-----------|\n" +
-  "A|-----------|-----------|\n" +
-  "E|-----------|-----------|\n";
+// Starter doc (Stan 2026-07-14): Blackbird — the byte-exact tab from
+// Stan's own TAB2XML test files (sha-verified corpus copy). Double-stop
+// chords in nearly every column, chord labels, lyrics, timing rows, and
+// one hostile side-by-side opening system (honest wild reality). The
+// directive prefix is the approved tasteful addition; music untouched.
+import blackbird from "./samples/blackbird.txt?raw";
+const INITIAL_DOC = `Title: Blackbird — The Beatles\nTempo: 95\n\n${blackbird}`;
 
 const astEl = document.getElementById("ast") as HTMLElement;
 const diagnosticsEl = document.getElementById("diagnostics") as HTMLElement;

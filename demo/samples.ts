@@ -9,6 +9,8 @@ import backbeatBass from "./samples/backbeat-bass.txt?raw";
 import yyzBass from "./samples/yyz-bass.txt?raw";
 import backbeatDrums from "./samples/backbeat-drums.txt?raw";
 import tomSawyer from "./samples/tom-sawyer-drums.txt?raw";
+import hotrs from "./samples/house-of-the-rising-sun.txt?raw";
+import canon from "./samples/pachelbel-canon-in-d.txt?raw";
 
 export interface SampleGroup {
   readonly group: string;
@@ -21,6 +23,8 @@ export const SAMPLES: readonly SampleGroup[] = [
     items: [
       { label: "Gnossienne No. 1 (Satie)", text: satie },
       { label: "Red Barchetta (Rush)", text: redBarchetta },
+      { label: "House of the Rising Sun (trad.)", text: hotrs },
+      { label: "Canon in D (Pachelbel)", text: canon },
     ],
   },
   {
