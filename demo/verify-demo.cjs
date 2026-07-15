@@ -123,6 +123,38 @@ async function startServer() {
     check(await page.$eval("#play", (el) => el.textContent.trim() === "⏸"), "playing shows pause glyph");
     check(await page.$eval("#transport-slider", (el) => !el.disabled), "slider enabled during playback");
     check(await page.$eval("#editor .cm-content", (el) => el.getAttribute("contenteditable") === "false"), "editor is read-only while playing");
+    // ——— sheet playback cursor (time join: scoreTimeAt ↔ OSMD timestamps) ———
+    await page.waitForFunction(
+      () => {
+        const c = document.querySelector("#sheet-score img.cursorImg, #sheet-score [id^=cursorImg]");
+        return c && c.style.display !== "none";
+      },
+      { timeout: 5000 }
+    );
+    const cursorX0 = await page.evaluate(() => {
+      const c = document.querySelector("#sheet-score img.cursorImg, #sheet-score [id^=cursorImg]");
+      return c.getBoundingClientRect().left;
+    });
+    await page.waitForFunction(
+      (x0) => {
+        const c = document.querySelector("#sheet-score img.cursorImg, #sheet-score [id^=cursorImg]");
+        return c && Math.abs(c.getBoundingClientRect().left - x0) > 5;
+      },
+      cursorX0,
+      { timeout: 8000 }
+    );
+    check(true, "sheet cursor appears and ADVANCES with playback");
+    await page.keyboard.press("Escape"); // stop
+    await page.waitForTimeout(150);
+    check(
+      await page.evaluate(() => {
+        const c = document.querySelector("#sheet-score img.cursorImg, #sheet-score [id^=cursorImg]");
+        return !c || c.style.display === "none";
+      }),
+      "sheet cursor hides when playback stops"
+    );
+    await page.click("#play"); // resume for the remaining stop-path checks
+    await page.waitForFunction(() => window.__lastPlayback && window.__lastPlayback.events > 0, { timeout: 5000 });
     await page.keyboard.press("Escape"); // stop
     check(await page.$eval("#play", (el) => el.textContent.trim() === "▶"), "Escape stops and restores play glyph");
     check(await page.$eval("#editor .cm-content", (el) => el.getAttribute("contenteditable") === "true"), "editor editable again after stop");

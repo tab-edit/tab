@@ -267,6 +267,7 @@ const stopPlayback = () => {
   player.stop();
   player = null;
   cancelAnimationFrame(raf);
+  hideSheetCursor();
   playButton.textContent = "▶";
   slider.disabled = true;
   slider.value = "0";
@@ -337,6 +338,7 @@ const tick = () => {
   const p = player.progress();
   slider.value = String(Math.round((p.sec / p.totalSec) * 1000));
   timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
+  followSheetCursor(player.scoreTimeAt(p.sec));
   if (followPlayhead && p.spans) {
     const key = rangeSignature(p.spans);
     if (key !== lastSpanKey) {
@@ -613,7 +615,54 @@ const osmd = new OpenSheetMusicDisplay(sheetScoreEl, {
   autoResize: true, // reflow to the pane width — no horizontal clipping
   backend: "svg",
   drawTitle: true,
+  followCursor: true, // sheet scrolls with the playback cursor
 });
+
+// ——— Sheet playback cursor: notation follows the playhead through the TIME
+// join — Player.scoreTimeAt and OSMD cursor timestamps are BOTH whole-note
+// fractions over the same exported durations, so tracking is arithmetic,
+// not element matching. NOTE: on docs where the sanitizer removed measures
+// (1-line-staff junk, already reported in the status line) the cursor can
+// drift within those regions — honest known limit until the grammar fixes.
+let sheetCursorShown = false;
+let sheetCursorNextTs = -1; // score time at which the cursor must advance
+const hideSheetCursor = (): void => {
+  sheetCursorNextTs = -1;
+  if (!sheetCursorShown) return;
+  sheetCursorShown = false;
+  try {
+    osmd.cursor.hide();
+  } catch {
+    // cursor DOM was invalidated by a re-render — nothing to hide
+  }
+};
+const followSheetCursor = (target: number): void => {
+  if (!sheetLoaded) return;
+  try {
+    const c = osmd.cursor;
+    if (!sheetCursorShown) {
+      c.reset();
+      c.show();
+      sheetCursorShown = true;
+      sheetCursorNextTs = -1;
+    }
+    // Backward jump (scrub/restart): rewind, then walk forward again.
+    if (c.iterator.currentTimeStamp.RealValue > target + 1e-6) {
+      c.reset();
+      sheetCursorNextTs = -1;
+    }
+    if (target < sheetCursorNextTs) return; // still on the sounding entry
+    let advanced = false;
+    while (!c.iterator.EndReached && c.iterator.currentTimeStamp.RealValue <= target + 1e-9) {
+      c.next();
+      advanced = true;
+    }
+    sheetCursorNextTs = c.iterator.EndReached ? Infinity : c.iterator.currentTimeStamp.RealValue;
+    if (advanced) c.previous(); // sit on the entry that is SOUNDING
+  } catch {
+    hideSheetCursor(); // never let cursor drift break playback
+  }
+};
 let sheetTree: unknown = null;
 let sheetGeneration = 0;
 let sheetLoaded = false;
@@ -699,6 +748,8 @@ async function renderSheet(tree: NonNullable<ReturnType<typeof tabTree>>): Promi
     await osmd.load(renderable);
     if (gen !== sheetGeneration) return; // superseded while loading
     osmd.render();
+    sheetCursorShown = false; // render rebuilt the DOM; re-show on next tick
+    sheetCursorNextTs = -1;
     sheetLoaded = true;
     sheetStatus(
       removed > 0

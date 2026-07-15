@@ -60,6 +60,9 @@ export interface Player {
    *  SAME line (columns are time within a system); undefined off this
    *  timeline (prose, or outside a selection-scoped playback). */
   secAt(pos: number): number | undefined;
+  /** time → SCORE time: whole-note fraction from the piece's notated start
+   *  (drives notation cursors — OSMD timestamps are the same unit). */
+  scoreTimeAt(sec: number): number;
   /** Called ~30×/s with the playhead; final call has ended=true. */
   progress(sec?: undefined): PlaybackProgress;
   stop(): void;
@@ -84,22 +87,32 @@ function bpmOf(state: EditorState): number {
 }
 
 /** Resolve the playable timeline for a state + selection (pure). */
+/** Playback seconds → SCORE TIME in whole-note fractions — the join key
+ *  between the audio clock and notation renderers (OSMD cursor timestamps
+ *  are whole-note fractions over the SAME exported durations, so this is
+ *  arithmetic, not matching). `baseSec` restores what start-normalization
+ *  removed. */
+export function secToWholeNotes(absSec: number, bpm: number): number {
+  return (absSec * bpm) / 240; // whole note = 4 quarters = 240/bpm seconds
+}
+
 export function timeline(
   state: EditorState,
   ranges: readonly SelectionRange[]
-): TimedEvent[] {
+): { events: TimedEvent[]; baseSec: number } {
   const tree = tabTree(state);
-  if (!tree) return [];
+  if (!tree) return { events: [], baseSec: 0 };
   let events = readTabProp(state, documentMidi, tree.topNode);
   // MIDI is 7-bit: anything outside 0..127 is junk data upstream (e.g.
   // prose years like "1866" parsing as frets — audit F5, gate pending) and
   // maps to a non-finite oscillator frequency that kills Web Audio.
+  const NONE = { events: [] as TimedEvent[], baseSec: 0 };
   const playable = events.filter((e: SmfNote) => e.midi >= 0 && e.midi <= 127);
   if (playable.length < events.length) {
     console.warn(`playback: skipped ${events.length - playable.length} out-of-range midi events`);
   }
   events = playable;
-  if (events.length === 0) return [];
+  if (events.length === 0) return NONE;
   // sourceFrom/sourceTo is the Sound's FLAT extent (rangeFrom(0)..rangeTo(last));
   // for a chord that spans lines, selecting it grabs whole lines. Resolve back
   // to the Sound node's per-line ranges once per distinct span (a chord emits
@@ -151,7 +164,7 @@ export function timeline(
     const covered = timed.filter((e) =>
       e.spans.some((s) => sel.some((r) => s.from < r.to && r.from < s.to))
     );
-    if (covered.length === 0) return [];
+    if (covered.length === 0) return NONE;
     const t0 = Math.min(...covered.map((e) => e.atSec));
     const t1 = Math.max(...covered.map((e) => e.atSec + e.durSec));
     const voiceLines = new Set<number>();
@@ -166,11 +179,12 @@ export function timeline(
         e.spans.some((s) => voiceLines.has(state.doc.lineAt(s.from).number))
     );
   }
-  if (timed.length === 0) return [];
+  if (timed.length === 0) return { events: [], baseSec: 0 };
   const base = Math.min(...timed.map((e) => e.atSec));
-  return timed
-    .map((e) => ({ ...e, atSec: e.atSec - base }))
-    .sort((a, b) => a.atSec - b.atSec);
+  return {
+    events: timed.map((e) => ({ ...e, atSec: e.atSec - base })).sort((a, b) => a.atSec - b.atSec),
+    baseSec: base,
+  };
 }
 
 /** Karplus-Strong plucked string, COMPUTED into a buffer (sample-accurate).
@@ -322,9 +336,10 @@ export function createPlayer(
   ranges: readonly SelectionRange[],
   timbre: Timbre = "plucked"
 ): Player | null {
-  const events = timeline(state, ranges);
+  const { events, baseSec } = timeline(state, ranges);
   if (events.length === 0) return null;
   const totalSec = Math.max(...events.map((e) => e.atSec + e.durSec));
+  const bpm = bpmOf(state);
 
   ctx ??= new AudioContext();
   const audio = ctx;
@@ -382,6 +397,7 @@ export function createPlayer(
   return {
     totalSec,
     events: events.length,
+    scoreTimeAt: (sec: number) => secToWholeNotes(baseSec + sec, bpm),
     get paused() {
       return paused;
     },
