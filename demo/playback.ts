@@ -26,8 +26,10 @@ interface TimedEvent {
   /** Note-on velocity 0-127 (technique dynamics: hammered/pulled notes and
    *  ghosts arrive softer from the midi pack). */
   readonly velocity: number;
-  /** Pitch curve (bends/releases) in absolute timeline seconds — the SAME
-   *  shared model the SMF encoder renders as channel pitch-bend (Q22). */
+  /** Pitch curve (bends/releases), offsets FROM THE NOTE'S OWN START — the
+   *  same shared model the SMF encoder renders as channel pitch-bend (Q22).
+   *  Note-relative on purpose: it survives the start-normalization shift
+   *  and selection filtering because it rides the note. */
   readonly bend?: readonly { atSec: number; semitones: number }[];
   readonly percussion: boolean;
   /** The source Sound's ranges, one per line (a chord is a column slice —
@@ -129,7 +131,7 @@ export function timeline(
     midi: e.midi,
     velocity: e.velocity ?? 0x60,
     ...(e.bend && e.bend.length > 0
-      ? { bend: e.bend.map((b) => ({ atSec: (e.tick + b.tick) * secPerTick, semitones: b.semitones })) }
+      ? { bend: e.bend.map((b) => ({ atSec: b.tick * secPerTick, semitones: b.semitones })) }
       : {}),
     percussion: e.percussion === true,
     spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
@@ -268,11 +270,15 @@ function scheduleFrom(
     const at = t0 + Math.max(0, e.atSec - offsetSec);
     const dur = e.durSec;
     // Velocity → gain, normalized so the pack default (0x60) keeps the
-    // tuned levels: hammered/ghost notes simply arrive softer.
-    const level = e.velocity / 0x60;
-    // Bend points on the audio clock (clamped to the note start on seeks).
+    // tuned levels. SQUARED on purpose: linear amplitude reads as barely
+    // -3 dB for a hammer-on (0x43) — squaring matches the velocity curve
+    // real synths use, so technique dynamics are actually audible
+    // (hammer ≈ half power, ghost ≈ quarter).
+    const level = (e.velocity / 0x60) ** 2;
+    // Bend points on the audio clock: note-relative offsets ride the
+    // note's own scheduled start.
     const bendPts = e.bend?.map((b) => ({
-      when: Math.max(at, t0 + b.atSec - offsetSec),
+      when: at + b.atSec,
       semitones: b.semitones,
     }));
     if (e.percussion) {
