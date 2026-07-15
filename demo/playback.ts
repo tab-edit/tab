@@ -23,6 +23,9 @@ interface TimedEvent {
   readonly atSec: number;
   readonly durSec: number;
   readonly midi: number;
+  /** Note-on velocity 0-127 (technique dynamics: hammered/pulled notes and
+   *  ghosts arrive softer from the midi pack). */
+  readonly velocity: number;
   readonly percussion: boolean;
   /** The source Sound's ranges, one per line (a chord is a column slice —
    *  its flat from..to would span whole lines of everything in between). */
@@ -121,6 +124,7 @@ export function timeline(
     atSec: e.tick * secPerTick,
     durSec: Math.max(0.05, e.durationTicks * secPerTick),
     midi: e.midi,
+    velocity: e.velocity ?? 0x60,
     percussion: e.percussion === true,
     spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
   }));
@@ -205,16 +209,24 @@ function pluckBuffer(audio: AudioContext, freq: number, durSec: number): AudioBu
   return buffer;
 }
 
-function pluck(audio: AudioContext, master: GainNode, at: number, freq: number, dur: number): void {
+function pluck(
+  audio: AudioContext,
+  master: GainNode,
+  at: number,
+  freq: number,
+  dur: number,
+  level: number
+): void {
   const src = audio.createBufferSource();
   src.buffer = pluckBuffer(audio, freq, dur);
   const out = audio.createGain();
   // 6 ms fade-in kills the digital click at sample 0; the long exponential
   // release lets the string ring past the notated duration like a real one
   // (nothing hard-gates a vibrating string at the next note's onset).
+  const peak = 0.25 * level;
   out.gain.setValueAtTime(0, at);
-  out.gain.linearRampToValueAtTime(0.25, at + 0.006);
-  out.gain.setValueAtTime(0.25, at + dur * 0.7);
+  out.gain.linearRampToValueAtTime(peak, at + 0.006);
+  out.gain.setValueAtTime(peak, at + dur * 0.7);
   out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.35);
   src.connect(out).connect(master);
   src.start(at);
@@ -232,6 +244,9 @@ function scheduleFrom(
     if (e.atSec + e.durSec <= offsetSec) continue;
     const at = t0 + Math.max(0, e.atSec - offsetSec);
     const dur = e.durSec;
+    // Velocity → gain, normalized so the pack default (0x60) keeps the
+    // tuned levels: hammered/ghost notes simply arrive softer.
+    const level = e.velocity / 0x60;
     if (e.percussion) {
       const len = Math.min(0.12, dur);
       const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * len), audio.sampleRate);
@@ -244,20 +259,20 @@ function scheduleFrom(
       band.frequency.value = 150 + (e.midi % 24) * 180;
       band.Q.value = 0.8;
       const gain = audio.createGain();
-      gain.gain.setValueAtTime(0.6, at);
+      gain.gain.setValueAtTime(0.6 * level, at);
       gain.gain.exponentialRampToValueAtTime(0.001, at + len);
       src.connect(band).connect(gain).connect(master);
       src.start(at);
     } else if (timbre === "plucked") {
-      pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur);
+      pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur, level);
     } else {
       const osc = audio.createOscillator();
       osc.type = timbre === "soft" ? "sine" : "triangle";
       osc.frequency.value = 440 * 2 ** ((e.midi - 69) / 12);
       const gain = audio.createGain();
       gain.gain.setValueAtTime(0, at);
-      gain.gain.linearRampToValueAtTime(0.15, at + 0.01);
-      gain.gain.setValueAtTime(0.15, at + dur * 0.7);
+      gain.gain.linearRampToValueAtTime(0.15 * level, at + 0.01);
+      gain.gain.setValueAtTime(0.15 * level, at + dur * 0.7);
       gain.gain.exponentialRampToValueAtTime(0.001, at + dur);
       osc.connect(gain).connect(master);
       osc.start(at);
