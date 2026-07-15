@@ -26,6 +26,9 @@ interface TimedEvent {
   /** Note-on velocity 0-127 (technique dynamics: hammered/pulled notes and
    *  ghosts arrive softer from the midi pack). */
   readonly velocity: number;
+  /** Pitch curve (bends/releases) in absolute timeline seconds — the SAME
+   *  shared model the SMF encoder renders as channel pitch-bend (Q22). */
+  readonly bend?: readonly { atSec: number; semitones: number }[];
   readonly percussion: boolean;
   /** The source Sound's ranges, one per line (a chord is a column slice —
    *  its flat from..to would span whole lines of everything in between). */
@@ -125,6 +128,9 @@ export function timeline(
     durSec: Math.max(0.05, e.durationTicks * secPerTick),
     midi: e.midi,
     velocity: e.velocity ?? 0x60,
+    ...(e.bend && e.bend.length > 0
+      ? { bend: e.bend.map((b) => ({ atSec: (e.tick + b.tick) * secPerTick, semitones: b.semitones })) }
+      : {}),
     percussion: e.percussion === true,
     spans: soundSpans(e.sourceFrom ?? 0, e.sourceTo ?? 0),
   }));
@@ -209,16 +215,33 @@ function pluckBuffer(audio: AudioContext, freq: number, durSec: number): AudioBu
   return buffer;
 }
 
+/** Render the shared pitch curve onto an AudioParam: exponential ramps in
+ *  value = linear in semitones — the audibly correct glide for bends. */
+function applyBend(
+  param: AudioParam,
+  base: number,
+  points: readonly { when: number; semitones: number }[] | undefined
+): void {
+  if (!points || points.length === 0) return;
+  const value = (s: number) => Math.max(1e-3, base * 2 ** (s / 12));
+  param.setValueAtTime(value(points[0].semitones), points[0].when);
+  for (let i = 1; i < points.length; i++) {
+    param.exponentialRampToValueAtTime(value(points[i].semitones), points[i].when);
+  }
+}
+
 function pluck(
   audio: AudioContext,
   master: GainNode,
   at: number,
   freq: number,
   dur: number,
-  level: number
+  level: number,
+  bend?: readonly { when: number; semitones: number }[]
 ): void {
   const src = audio.createBufferSource();
   src.buffer = pluckBuffer(audio, freq, dur);
+  applyBend(src.playbackRate, 1, bend);
   const out = audio.createGain();
   // 6 ms fade-in kills the digital click at sample 0; the long exponential
   // release lets the string ring past the notated duration like a real one
@@ -247,6 +270,11 @@ function scheduleFrom(
     // Velocity → gain, normalized so the pack default (0x60) keeps the
     // tuned levels: hammered/ghost notes simply arrive softer.
     const level = e.velocity / 0x60;
+    // Bend points on the audio clock (clamped to the note start on seeks).
+    const bendPts = e.bend?.map((b) => ({
+      when: Math.max(at, t0 + b.atSec - offsetSec),
+      semitones: b.semitones,
+    }));
     if (e.percussion) {
       const len = Math.min(0.12, dur);
       const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * len), audio.sampleRate);
@@ -264,11 +292,13 @@ function scheduleFrom(
       src.connect(band).connect(gain).connect(master);
       src.start(at);
     } else if (timbre === "plucked") {
-      pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur, level);
+      pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur, level, bendPts);
     } else {
       const osc = audio.createOscillator();
       osc.type = timbre === "soft" ? "sine" : "triangle";
-      osc.frequency.value = 440 * 2 ** ((e.midi - 69) / 12);
+      const freq = 440 * 2 ** ((e.midi - 69) / 12);
+      osc.frequency.value = freq;
+      applyBend(osc.frequency, freq, bendPts);
       const gain = audio.createGain();
       gain.gain.setValueAtTime(0, at);
       gain.gain.linearRampToValueAtTime(0.15 * level, at + 0.01);
