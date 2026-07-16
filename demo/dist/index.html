@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tab-edit demo</title>
+    <script type="module" crossorigin src="/assets/index-KlVuCOHP.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DYnPQ8GL.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>tab-edit</h1>
+      <select id="sample-picker" class="sample-picker" title="load a sample tab"></select>
+      <div class="actions">
+        <details class="menu" id="file-menu">
+          <summary>File</summary>
+          <div class="menu-items">
+            <button id="import-xml">Import MusicXML…</button>
+            <button id="export-xml">Export MusicXML</button>
+            <button id="export-midi">Export MIDI</button>
+          </div>
+        </details>
+        <details class="menu" id="settings-menu">
+          <summary title="editor settings">⚙</summary>
+          <div class="menu-items">
+            <label class="toggle" title="drag selects a column (a time slice across all strings)">
+              <input id="toggle-column-selection" type="checkbox" checked />
+              column select
+            </label>
+            <label class="toggle">
+              <input id="toggle-highlight-selection" type="checkbox" checked />
+              highlight selection
+            </label>
+          </div>
+        </details>
+        <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
+      </div>
+    </header>
+    <main class="layout">
+      <section id="editor" class="pane editor-pane"></section>
+      <aside class="side-panes">
+        <section class="pane pane-sheet">
+          <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
+          <div id="sheet" class="pane-body sheet-body">
+            <div class="sheet-controls">
+              <button id="sheet-mode">standard notation</button>
+            </div>
+            <div id="sheet-status" class="sheet-status" hidden></div>
+            <div id="sheet-score"></div>
+          </div>
+        </section>
+        <section class="pane pane-inspector">
+          <h2 title="each row: value · who could shape it · who ran">Inspector <span class="pane-sub">click a note or measure in the editor — its computed values appear here</span></h2>
+          <div id="inspector" class="pane-body inspector-body"></div>
+        </section>
+        <section class="pane pane-ast collapsed">
+          <h2>AST</h2>
+          <div id="ast" class="pane-body ast-body"></div>
+        </section>
+        <section class="pane pane-diagnostics collapsed">
+          <h2>Diagnostics</h2>
+          <div id="diagnostics" class="pane-body diagnostics-body"></div>
+        </section>
+        <section class="pane pane-activity collapsed">
+          <h2>Activity <span class="pane-sub">what actually computed since the last refresh</span></h2>
+          <div id="activity" class="pane-body activity-body"></div>
+        </section>
+      </aside>
+    </main>
+    <footer class="statusbar">
+      <div class="transport">
+        <button id="play" title="play from the cursor — or just your selection (Space)">▶</button>
+        <span id="transport-time" class="transport-time"></span>
+        <input id="transport-slider" class="transport-slider" type="range" min="0" max="1000" value="0" disabled />
+        <select id="timbre-picker" class="sample-picker timbre-picker" title="playback sound for pitched notes (drums always play as drums)">
+          <option value="plucked">plucked</option>
+          <option value="tone">tone</option>
+          <option value="soft">soft</option>
+        </select>
+        <button id="follow-playhead" class="follow active" aria-pressed="true" disabled>⌖ follow</button>
+      </div>
+      <div class="hint" id="tip"></div>
+    </footer>
+  </body>
+</html>
