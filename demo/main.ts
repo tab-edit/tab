@@ -435,6 +435,10 @@ const renderFollowButton = () => {
 };
 followButton.addEventListener("click", () => {
   followPlayhead = !followPlayhead;
+  // The SHEET obeys the same toggle: the cursor still moves either way,
+  // but autoscroll must never trap a user who turned following off
+  // (Stan 2026-07-16).
+  osmd.FollowCursor = followPlayhead;
   renderFollowButton();
   sayTip(
     followPlayhead
@@ -624,7 +628,7 @@ const osmd = new OpenSheetMusicDisplay(sheetScoreEl, {
   autoResize: true, // reflow to the pane width — no horizontal clipping
   backend: "svg",
   drawTitle: true,
-  followCursor: true, // sheet scrolls with the playback cursor
+  followCursor: true, // autoscroll; toggled live with the ⌖ follow button
 });
 
 // ——— Sheet playback cursor: notation follows the playhead through the TIME
