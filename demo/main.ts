@@ -825,8 +825,12 @@ function formatValue(v: unknown): string {
 // Uniform display budget for ALL values (strings included — sectionXml used
 // to dump untruncated); rows expose click-to-expand + copy-full instead.
 const VALUE_BUDGET = 180;
+// Truncate only when the ellipsis actually SAVES space: at BUDGET+1 the
+// "truncated" form is the same length as the truth — such a row would be
+// marked expandable with nothing to reveal (found-by-driver: a 181-char
+// measureStarts value).
 const truncate = (s: string): string =>
-  s.length > VALUE_BUDGET ? `${s.slice(0, VALUE_BUDGET)}…` : s;
+  s.length > VALUE_BUDGET + 1 ? `${s.slice(0, VALUE_BUDGET)}…` : s;
 
 // ——— Inspector: one row per prop, grouped by the OWNING plugin (prop ids
 // are "pluginId/propName"). Filter/collapse state is module-level so it
@@ -906,7 +910,7 @@ function inspectorRow(entry: InspectorEntry): HTMLElement {
 
   const value = document.createElement("span");
   const fullText = p.error ? `⚠ ${p.error}` : ` = ${formatValue(p.value)}`;
-  const truncatable = fullText.length > VALUE_BUDGET;
+  const truncatable = fullText.length > VALUE_BUDGET + 1;
   let expanded = false;
   value.className = p.error ? "inspector-value inspector-error" : "inspector-value";
   if (truncatable) value.classList.add("expandable");

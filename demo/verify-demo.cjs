@@ -427,13 +427,28 @@ async function startServer() {
     await page.waitForTimeout(700);
     const lengths = await page.$$eval("#inspector .inspector-value", (els) => els.map((e) => e.textContent.length));
     check(lengths.length > 0 && lengths.every((n) => n <= 230), `every value truncates uniformly (max ${Math.max(...lengths)})`);
-    const expandable = await page.$("#inspector .inspector-value.expandable");
-    check(!!expandable, "long values are click-expandable");
-    const beforeLen = await expandable.evaluate((e) => e.textContent.length);
-    await expandable.click();
-    const afterLen = await expandable.evaluate((e) => e.textContent.length);
-    check(afterLen > beforeLen, `clicking expands the full value (${beforeLen} → ${afterLen})`);
-    await expandable.click(); // collapse back
+    // Query FRESH at click time: compute completions replaceWith() rows,
+    // so a held element handle can go stale mid-check (raced once the
+    // engine's documentXml got bigger — 2026-07-16).
+    await page.waitForTimeout(400);
+    check(!!(await page.$("#inspector .inspector-value.expandable")), "long values are click-expandable");
+    // Atomic in-page click+measure on EVERY expandable (same element, same
+    // tick — immune to re-renders between driver roundtrips), then collapse
+    // back. Stronger than the old first-element check and names offenders.
+    const expandResults = await page.$$eval("#inspector .inspector-value.expandable", (els) =>
+      els.map((e) => {
+        const before = e.textContent.length;
+        e.click();
+        const after = e.textContent.length;
+        e.click(); // collapse back
+        return { label: (e.parentElement?.textContent ?? "").slice(0, 40), before, after };
+      })
+    );
+    const noops = expandResults.filter((r) => r.after <= r.before);
+    check(
+      expandResults.length > 0 && noops.length === 0,
+      `clicking expands every truncated value (${expandResults.length} rows${noops.length ? `; NO-OP: ${JSON.stringify(noops)}` : ""})`
+    );
     // Copy must write the FULL value — test it on the LONGEST expandable row
     // (row order varies with lint timing; "first expandable" is sometimes the
     // still-populating diagnostics array, whose full value is short).
