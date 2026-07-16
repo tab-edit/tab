@@ -603,12 +603,21 @@ function pollAndRender(gen: number, attempt = 0): void {
     note.textContent = `+ ${inspectorCost.totalRecomputes} runs from the Inspector pane`;
     activityEl.appendChild(note);
   }
-  void renderSheet(tree);
+  scheduleSheet(tree);
 }
 
 // ——— Live sheet music: the REAL musicXml export rendered by OSMD. The
-// per-section XML cache (§7.4) does the incremental work; this pane just
-// re-renders when the tree changes.
+// per-section XML cache (§7.4) does the incremental work; this pane
+// re-renders on a TYPING-QUIET debounce, not per keystroke: the engine is
+// pull-based (nothing recomputes unless read), and reading documentXml on
+// every keystroke was the single biggest typing cost on large docs
+// (edit-stress evidence 2026-07-16: export-profile keystrokes cost 2-8×
+// typing-profile ones). 250ms of quiet ≈ imperceptible for a score pane.
+let sheetTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleSheet(tree: NonNullable<ReturnType<typeof tabTree>>): void {
+  clearTimeout(sheetTimer);
+  sheetTimer = setTimeout(() => void renderSheet(tree), 250);
+}
 const sheetStatusEl = document.getElementById("sheet-status") as HTMLElement;
 const sheetScoreEl = document.getElementById("sheet-score") as HTMLElement;
 const osmd = new OpenSheetMusicDisplay(sheetScoreEl, {
