@@ -190,7 +190,12 @@ export function chaosTransport(
     if (!lane.length) return;
     const index = reorder && !lossless ? Math.floor(rand() * lane.length) : 0;
     const [msg] = lane.splice(index, 1);
-    if (drop) return;
+    // hello/helloOk never drop: real transports are ordered-reliable (TCP);
+    // losing THOSE means the socket died, and that recovery — reconnect,
+    // fresh hello — lives above the transport. Every other loss heals
+    // in-protocol (updates → resync on the next update; snapshot → next
+    // frame; ack/resync → idempotent).
+    if (drop && msg.type !== "hello" && msg.type !== "helloOk") return;
     if (lane === up) {
       for (const reply of handle(JSON.parse(JSON.stringify(msg)))) {
         down.push(JSON.parse(JSON.stringify(reply)) as ServerMessage);

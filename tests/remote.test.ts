@@ -85,9 +85,16 @@ function localTruth(doc: string): SemanticSnapshot {
   return JSON.parse(JSON.stringify(snap)) as SemanticSnapshot;
 }
 
-/** The oracle: the protocol spoken by the LOCAL engine. Mirrors the
- *  remote-host Session's discipline — version counting, resync on any
- *  doubt — so client recovery paths are exercised for real. */
+/** The oracle: the protocol spoken by the LOCAL engine — as a NAIVE
+ *  reference server (cold full parse per update, the remote-plugin-dev.md
+ *  naive-engine shape). Cold parsing keeps it DETERMINISTIC: CM's
+ *  incremental machinery re-cuts fragments by wall-clock work slices
+ *  (#17 recovery-region divergence then flakes under load — found
+ *  2026-07-16). The client can't tell (purity), so this suite pins pure
+ *  client/wire correctness; incremental-vs-cold is the engine's own
+ *  charter (session.test.ts mini-I2 + OPEN-PROBLEMS #17). It still
+ *  mirrors the Session's message discipline — version counting, resync
+ *  on any doubt — so recovery paths are exercised for real. */
 class OracleSession {
   state: EditorState | null = null;
   version = 0;
@@ -111,6 +118,7 @@ class OracleSession {
         if (msg.fromVersion !== this.version) {
           return [{ type: "resync", reason: "version gap" }];
         }
+        let doc = this.state.doc;
         for (const change of msg.changes) {
           let set: ChangeSet;
           try {
@@ -118,15 +126,13 @@ class OracleSession {
           } catch {
             return [{ type: "resync", reason: "bad changeset" }];
           }
-          if (set.length !== this.state.doc.length) {
+          if (set.length !== doc.length) {
             return [{ type: "resync", reason: "length mismatch" }];
           }
-          this.state = this.state.update({ changes: set }).state;
+          doc = set.apply(doc);
           this.version++;
         }
-        expect(
-          ensureSyntaxTree(this.state, this.state.doc.length, 10_000)
-        ).not.toBeNull();
+        this.state = localState(doc.toString()); // naive: cold parse
         return [{ type: "ack", version: this.version }, this.snapshot()];
       }
       case "query": {
@@ -195,10 +201,12 @@ test("loopback differential: seeded edit storm, remote ≡ local at every step (
         ? { from, insert: glyphs[Math.floor(rand() * glyphs.length)] }
         : { from, to: Math.min(from + 1 + Math.floor(rand() * 3), ed.state.doc.length) }
     );
-    const remote = snapshotOf(ed.state);
-    const local = localTruth(ed.state.doc.toString());
-    if (JSON.stringify(remote) !== JSON.stringify(local)) {
-      throw new Error(`divergence at seed=${seed} step=${step}`);
+    // toEqual, not JSON string equality: producers may order object KEYS
+    // differently across implementations — values are the contract.
+    try {
+      expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
+    } catch (e) {
+      throw new Error(`divergence at seed=${seed} step=${step}\n${(e as Error).message}`);
     }
   }
   expect(ed.client.staleBy).toBe(0);
@@ -326,14 +334,21 @@ test("chaos storm: delay + reorder + drop — typing never breaks, quiet converg
       }
     }
     // The network goes quiet: everything queued delivers (resync cascades
-    // included) → the storm's damage heals completely (I2 + I5).
+    // included). A DROPPED upstream update can leave the server behind with
+    // nothing left in flight — the protocol's recovery move for that is
+    // resync-on-the-NEXT-update, so one clean exchange after quiet is the
+    // legitimate healing trigger (I5). Then convergence must be total (I2).
     chaos.drain();
+    if (ed.client.staleBy > 0) {
+      ed.edit({ from: 0, insert: "~" });
+      chaos.drain();
+    }
     expect(chaos.pending).toBe(0);
     expect(ed.client.staleBy).toBe(0);
-    const remote = snapshotOf(ed.state);
-    const local = localTruth(ed.state.doc.toString());
-    if (JSON.stringify(remote) !== JSON.stringify(local)) {
-      throw new Error(`chaos divergence at seed=${seed}`);
+    try {
+      expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
+    } catch (e) {
+      throw new Error(`chaos divergence at seed=${seed}\n${(e as Error).message}`);
     }
   }
 });
