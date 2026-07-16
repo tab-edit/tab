@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Authorize private @tab-edit git installs
+        env:
+          TOKEN: ${{ secrets.TAB_EDIT_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::TAB_EDIT_READ_TOKEN is not set — add a fine-grained PAT (read-only Contents on the tab-edit repos) as an org or repo Actions secret"; exit 1; }
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+      - run: npm ci
+      - run: npm run type-check
+      - run: npm test
+      - name: Demo builds (the Vercel artifact path)
+        run: npm run demo:build
