@@ -5,11 +5,13 @@
 
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import type { EditorState, Extension } from "@codemirror/state";
-import { tabStateDiagnostics } from "./state-layer.js";
+import { snapshotOf } from "./semantics.js";
 
-/** Pure mapping (headless-testable): tab-edit diagnostics → CM shape. */
+/** Pure mapping (headless-testable): SNAPSHOT diagnostics → CM shape
+ *  (ADR-003 M-R0: the lint source renders snapshot data; the linter's own
+ *  delay re-pulls, so it always sees the current tree's snapshot). */
 export function tabDiagnostics(state: EditorState): CmDiagnostic[] {
-  return tabStateDiagnostics(state).map((d) => ({
+  return (snapshotOf(state)?.diagnostics ?? []).map((d) => ({
     from: d.from,
     to: d.to,
     severity: d.severity,

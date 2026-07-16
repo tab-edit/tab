@@ -41,14 +41,21 @@ src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
                     chain trace + computed-vs-cached + install warnings)
 src/semantics.ts    ADR-003 M-R0: SemanticSnapshot (wire-ready value data:
                     sound/measure maps, directives, receded lines,
-                    diagnostics) + pure resolvers (soundRangesAt,
-                    selectionHighlightsAt) replicating nodesInRanges range
-                    algebra — proven ≡ tree queries by exhaustive sweep
-                    (tests/semantics.test.ts)
-src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply = dispatch edits)
+                    diagnostics) — home of the pure tree-reading CORES
+                    (producers) + snapshotOf (WeakMap<TabTree,snap> cache,
+                    the local SemanticsClient) + pure data RESOLVERS
+                    (soundRangesAt, selectionHighlightsAt) replicating
+                    nodesInRanges range algebra — proven ≡ tree queries by
+                    exhaustive sweep (tests/semantics.test.ts)
+src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply =
+                    dispatch edits); source renders SNAPSHOT diagnostics
 src/selection.ts    selectedNodes (column selections!), midiOfSelection
 src/export.ts       musicXml(state), midiFile(state), importMusicXml(state, xml)
-src/decorations.ts  chord highlighter (sound under cursor, all its lines)
+src/decorations.ts  ViewPlugins ONLY since M-R0 — chord/selection highlights,
+                    directive underlines, prose recession all render pure
+                    SNAPSHOT data (build() never touches tree or engine);
+                    rebuilds also on snapshot-identity change (closes the
+                    stale-after-async-reparse gap)
 src/index.ts        tablature() — the whole system as one extension
 tests/adapter.test.ts  E2E on real CM machinery
 ```

@@ -11,8 +11,10 @@ import {
   recededLineStarts,
   selectedNodeHighlightRanges,
   selectionHighlightsAt,
+  snapshotOf,
   soundRangesAt,
   soundRangesAtCursor,
+  tabDiagnostics,
   tablature,
   tabStateDiagnostics,
 } from "../src/index.js";
@@ -115,6 +117,39 @@ test("selection highlights from the snapshot ≡ live tree query (windows, colum
     const spans = s.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
     expect(selectionHighlightsAt(snap, spans)).toEqual(selectedNodeHighlightRanges(s));
   }
+});
+
+test("snapshotOf rides the tree: cached by identity, fresh after an edit", () => {
+  const s1 = stateOf(DOC);
+  const snapA = snapshotOf(s1)!;
+  expect(snapshotOf(s1)).toBe(snapA); // repeat read: same object
+  // Selection-only update: same tree → same snapshot (no recompute).
+  const s2 = s1.update({ selection: EditorSelection.single(5) }).state;
+  expect(snapshotOf(s2)).toBe(snapA);
+  // A real edit inside the first system: new tree → new snapshot.
+  const editAt = s1.doc.line(4).from + 4;
+  const s3 = s1.update({ changes: { from: editAt, to: editAt + 1, insert: "7" } }).state;
+  expect(ensureSyntaxTree(s3, s3.doc.length, 10_000)).not.toBeNull();
+  const snapB = snapshotOf(s3)!;
+  expect(snapB).not.toBe(snapA);
+  expect(snapB).toEqual(computeSnapshot(s3));
+});
+
+test("lint source renders snapshot diagnostics (reroute is lossless)", () => {
+  const state = stateOf(DOC);
+  const viaSnapshot = tabDiagnostics(state).map((d) => ({
+    from: d.from,
+    to: d.to,
+    severity: d.severity,
+    message: d.message,
+  }));
+  const viaEngine = tabStateDiagnostics(state).map((d) => ({
+    from: d.from,
+    to: d.to,
+    severity: d.severity,
+    message: d.message,
+  }));
+  expect(viaSnapshot).toEqual(viaEngine);
 });
 
 test("directive/receded/diagnostic surfaces ride the snapshot unchanged", () => {

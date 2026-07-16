@@ -1,26 +1,31 @@
 // Semantic decorations (ADR-001 App-A: token coloring is the BASE tree's
-// styleTags job; SEMANTIC styling is the decoration domain). v1 ships the
-// chord highlighter: the Sound under the main cursor lights up on EVERY
-// line it touches — multi-range semantic nodes made visible.
+// styleTags job; SEMANTIC styling is the decoration domain). Since ADR-003
+// M-R0 every plugin here renders from SNAPSHOT DATA (semantics.ts) — the
+// build() bodies never touch the tree or the engine, which is exactly what
+// lets M-R1 swap the snapshot's origin for the wire. Each plugin also
+// rebuilds when the SNAPSHOT identity changes (a reparse finishing without
+// a doc/selection/viewport change used to leave stale decorations until the
+// next trigger — the snapshot check closes that latent gap).
 
 import { Decoration, EditorView, ViewPlugin, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { EditorState, Extension } from "@codemirror/state";
-import { blockKind, directiveEntries, segmentKind } from "@tab-edit/plugins";
-import { tabTree } from "./language.js";
-import { readTabProp } from "./state-layer.js";
+import {
+  selectionHighlightsAt,
+  snapshotOf,
+  soundRangesAt,
+} from "./semantics.js";
 
-/** Pure core (headless-testable): ranges of the Sound at the main cursor. */
-export function soundRangesAtCursor(state: EditorState): { from: number; to: number }[] {
-  const tree = tabTree(state);
-  if (!tree) return [];
-  const head = state.selection.main.head;
-  const sound = tree.nodesInRanges([{ from: head, to: head }], "Sound")[0];
-  if (!sound) return [];
-  return Array.from({ length: sound.rangeCount }, (_, i) => ({
-    from: sound.rangeFrom(i),
-    to: sound.rangeTo(i),
-  }));
-}
+// Re-exported from their new home (public API unchanged; semantics.ts owns
+// the pure tree-reading cores now — they produce the snapshot).
+export {
+  directiveAnnotationRanges,
+  recededLineStarts,
+  selectedNodeHighlightRanges,
+  soundRangesAtCursor,
+} from "./semantics.js";
+
+const snapshotChanged = (update: ViewUpdate): boolean =>
+  snapshotOf(update.state) !== snapshotOf(update.startState);
 
 const soundMark = Decoration.mark({ class: "cm-tabSound" });
 
@@ -33,16 +38,21 @@ const soundHighlightPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+      if (
+        update.docChanged ||
+        update.selectionSet ||
+        update.viewportChanged ||
+        snapshotChanged(update)
+      ) {
         this.decorations = this.build(update.state);
       }
     }
 
     private build(state: EditorState): DecorationSet {
+      const snap = snapshotOf(state);
+      const ranges = snap ? soundRangesAt(snap, state.selection.main.head) : [];
       return Decoration.set(
-        soundRangesAtCursor(state)
-          .filter((r) => r.to > r.from)
-          .map((r) => soundMark.range(r.from, r.to))
+        ranges.filter((r) => r.to > r.from).map((r) => soundMark.range(r.from, r.to))
       );
     }
   },
@@ -58,33 +68,6 @@ export function soundHighlight(): Extension {
   return [soundHighlightPlugin, soundHighlightTheme];
 }
 
-/** Pure core (headless-testable): the Sounds and Measures intersecting the
- *  CURRENT selection, one range per (node × line it spans). Empty when the
- *  selection is a plain caret (no non-empty range) — this is a SELECTION
- *  highlighter, distinct from the cursor-driven chord highlighter above. */
-export function selectedNodeHighlightRanges(
-  state: EditorState
-): { from: number; to: number; cls: string }[] {
-  const tree = tabTree(state);
-  if (!tree) return [];
-  const ranges = state.selection.ranges;
-  if (!ranges.some((r) => !r.empty)) return [];
-  const spans = ranges.map((r) => ({ from: r.from, to: r.to }));
-
-  const out: { from: number; to: number; cls: string }[] = [];
-  for (const [type, cls] of [
-    ["Sound", "cm-tab-selected-sound"],
-    ["Measure", "cm-tab-selected-measure"],
-  ] as const) {
-    for (const node of tree.nodesInRanges(spans, type)) {
-      for (let i = 0; i < node.rangeCount; i++) {
-        out.push({ from: node.rangeFrom(i), to: node.rangeTo(i), cls });
-      }
-    }
-  }
-  return out;
-}
-
 const selectedSoundMark = Decoration.mark({ class: "cm-tab-selected-sound" });
 const selectedMeasureMark = Decoration.mark({ class: "cm-tab-selected-measure" });
 
@@ -97,14 +80,21 @@ const selectionNodeHighlightPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.selectionSet || update.viewportChanged) {
+      if (
+        update.docChanged ||
+        update.selectionSet ||
+        update.viewportChanged ||
+        snapshotChanged(update)
+      ) {
         this.decorations = this.build(update.state);
       }
     }
 
     private build(state: EditorState): DecorationSet {
+      const snap = snapshotOf(state);
+      const spans = state.selection.ranges.map((r) => ({ from: r.from, to: r.to }));
       return Decoration.set(
-        selectedNodeHighlightRanges(state)
+        (snap ? selectionHighlightsAt(snap, spans) : [])
           .filter((r) => r.to > r.from)
           .map((r) =>
             (r.cls === "cm-tab-selected-sound" ? selectedSoundMark : selectedMeasureMark).range(
@@ -130,25 +120,6 @@ export function selectionNodeHighlight(): Extension {
   return [selectionNodeHighlightPlugin, selectionNodeHighlightTheme];
 }
 
-/** Pure core (headless-testable): absolute spans of every recognized
- *  directive (key start → value end), read from the directiveEntries
- *  evidence prop — the adapter never re-derives parsing. */
-export function directiveAnnotationRanges(
-  state: EditorState
-): { from: number; to: number; key: string; value: string }[] {
-  const tree = tabTree(state);
-  if (!tree) return [];
-  const top = tree.topNode;
-  const out: { from: number; to: number; key: string; value: string }[] = [];
-  for (const node of [...top.getChildren("Section"), ...top.getChildren("Comment")]) {
-    const base = node.rangeFrom(0);
-    for (const e of readTabProp(state, directiveEntries, node)) {
-      out.push({ from: base + e.from, to: base + e.to, key: e.key, value: e.value });
-    }
-  }
-  return out.sort((a, b) => a.from - b.from);
-}
-
 const directiveAnnotationPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -158,14 +129,15 @@ const directiveAnnotationPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (update.docChanged || update.viewportChanged || snapshotChanged(update)) {
         this.decorations = this.build(update.state);
       }
     }
 
     private build(state: EditorState): DecorationSet {
+      const snap = snapshotOf(state);
       return Decoration.set(
-        directiveAnnotationRanges(state)
+        (snap ? snap.directives : [])
           .filter((r) => r.to > r.from)
           .map((r) =>
             Decoration.mark({
@@ -193,57 +165,6 @@ export function directiveAnnotations(): Extension {
   return [directiveAnnotationPlugin, directiveAnnotationTheme];
 }
 
-/** Pure core (headless-testable): line starts that should render RECEDED
- *  (.cm-tabProse): lines of prose-kind blocks, whole prose sections
- *  (covers ownerless skipped rows), and #-comment lines. Music untouched;
- *  DIRECTIVE blocks stay full strength — they are load-bearing config.
- *  Driven by the CLAIM verdicts (blockKind/segmentKind), so a pack that
- *  re-claims a block — or the user's `kind:` escape hatch — restyles it
- *  automatically: plugin-level presentation via the claims algebra. */
-export function recededLineStarts(state: EditorState): number[] {
-  const tree = tabTree(state);
-  if (!tree) return [];
-  const doc = state.doc;
-  const starts = new Set<number>();
-  const addSpan = (from: number, to: number): void => {
-    let pos = Math.min(from, doc.length);
-    // Node ranges include the trailing newline — treat `to` as EXCLUSIVE
-    // of the line that merely STARTS there (found-by-test: the section
-    // ending at 18 dimmed the music line beginning at 18).
-    const end = Math.min(to, doc.length);
-    while (pos < end) {
-      const line = doc.lineAt(pos);
-      starts.add(line.from);
-      if (line.to >= end) break;
-      pos = line.to + 1;
-    }
-  };
-  for (const section of tree.topNode.getChildren("Section")) {
-    if (readTabProp(state, segmentKind, section) === "prose") {
-      addSpan(section.rangeFrom(0), section.rangeTo(section.rangeCount - 1));
-      continue;
-    }
-    for (const block of section.getChildren("Block")) {
-      if (readTabProp(state, blockKind, block) !== "prose") continue;
-      for (let i = 0; i < block.rangeCount; i++) {
-        addSpan(block.rangeFrom(i), block.rangeTo(i));
-      }
-    }
-  }
-  for (const comment of tree.topNode.getChildren("Comment")) {
-    addSpan(comment.rangeFrom(0), comment.rangeTo(comment.rangeCount - 1));
-  }
-  // A line the system RECOGNIZED as a directive never recedes — it is
-  // load-bearing config even when its block reads prose (the tokenizer
-  // splits bare "Title: Demo Song" lines into prose fragments; the
-  // directive-entry scan still sees the whole line). Keeps the dotted
-  // underline and full strength consistent with each other.
-  for (const r of directiveAnnotationRanges(state)) {
-    starts.delete(doc.lineAt(r.from).from);
-  }
-  return [...starts].sort((a, b) => a - b);
-}
-
 const prosLine = Decoration.line({ class: "cm-tabProse" });
 
 const kindStylingPlugin = ViewPlugin.fromClass(
@@ -255,13 +176,14 @@ const kindStylingPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (update.docChanged || update.viewportChanged || snapshotChanged(update)) {
         this.decorations = this.build(update.state);
       }
     }
 
     private build(state: EditorState): DecorationSet {
-      return Decoration.set(recededLineStarts(state).map((pos) => prosLine.range(pos)));
+      const snap = snapshotOf(state);
+      return Decoration.set((snap ? snap.recededLineStarts : []).map((pos) => prosLine.range(pos)));
     }
   },
   { decorations: (v) => v.decorations }
