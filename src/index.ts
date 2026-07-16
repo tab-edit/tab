@@ -107,8 +107,10 @@ export {
 } from "./decorations.js";
 export {
   computeSnapshot,
+  localSnapshotOf,
   selectionHighlightsAt,
   snapshotOf,
+  snapshotSource,
   soundRangesAt,
 } from "./semantics.js";
 export type {
@@ -116,4 +118,22 @@ export type {
   NodeRanges,
   SemanticSnapshot,
   SnapshotRange,
+  SnapshotSource,
 } from "./semantics.js";
+export {
+  applyRemoteSnapshot,
+  chaosTransport,
+  mapSnapshot,
+  RemoteClient,
+  remoteSemantics,
+  remoteSnapshotField,
+  sessionTransport,
+  webSocketTransport,
+} from "./remote.js";
+export type {
+  ChaosOptions,
+  ChaosTransport,
+  RemoteClientOptions,
+  RemoteStatus,
+  RemoteTransport,
+} from "./remote.js";

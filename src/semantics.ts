@@ -10,7 +10,7 @@
 //   a tree. Their range algebra replicates TabTree.nodesInRanges
 //   (ast core/tree.ts) — keep the two in lockstep.
 
-import type { EditorState } from "@codemirror/state";
+import { Facet, type EditorState } from "@codemirror/state";
 import type { Diagnostic, TabTree } from "@tab-edit/ast";
 import { blockKind, directiveEntries, segmentKind } from "@tab-edit/plugins";
 import { tabTree } from "./language.js";
@@ -183,10 +183,9 @@ export function computeSnapshot(state: EditorState): SemanticSnapshot | null {
 /** Snapshot rides the tree the way the TabTree rides the base tree: one
  *  compute per tree, cached by identity. Selection/viewport updates hit the
  *  cache; a reparse (new tree) recomputes lazily on first read. This is the
- *  LOCAL SemanticsClient: consumers already render pure snapshot data, so
- *  M-R1's remote client only swaps WHERE the snapshot comes from. */
+ *  LOCAL SemanticsClient. */
 const snapshots = new WeakMap<TabTree, SemanticSnapshot>();
-export function snapshotOf(state: EditorState): SemanticSnapshot | null {
+export function localSnapshotOf(state: EditorState): SemanticSnapshot | null {
   const tree = tabTree(state);
   if (!tree) return null;
   const cached = snapshots.get(tree);
@@ -194,6 +193,21 @@ export function snapshotOf(state: EditorState): SemanticSnapshot | null {
   const snap = computeSnapshot(state)!;
   snapshots.set(tree, snap);
   return snap;
+}
+
+/** Where snapshots come from — the SemanticsClient seam (ADR-003 M-R1).
+ *  Nothing installed = the local in-process engine; a RemoteClient installs
+ *  a source reading its wire-fed overlay store. Every consumer (decorations,
+ *  lint) goes through snapshotOf, so swapping the source swaps the origin
+ *  of ALL semantic rendering at once. */
+export type SnapshotSource = (state: EditorState) => SemanticSnapshot | null;
+export const snapshotSource = Facet.define<SnapshotSource, SnapshotSource | null>({
+  combine: (sources) => (sources.length ? sources[0] : null),
+});
+
+export function snapshotOf(state: EditorState): SemanticSnapshot | null {
+  const source = state.facet(snapshotSource);
+  return source ? source(state) : localSnapshotOf(state);
 }
 
 // ─── Resolvers (pure data — the remote client's 0 ms half) ───────────────
