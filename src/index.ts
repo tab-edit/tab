@@ -105,3 +105,10 @@ export {
   soundHighlight,
   soundRangesAtCursor,
 } from "./decorations.js";
+export { computeSnapshot, selectionHighlightsAt, soundRangesAt } from "./semantics.js";
+export type {
+  DirectiveSpan,
+  NodeRanges,
+  SemanticSnapshot,
+  SnapshotRange,
+} from "./semantics.js";

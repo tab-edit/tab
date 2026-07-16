@@ -39,6 +39,12 @@ src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
                     counts — the perf-diagnosis surface; call AFTER reads),
                     inspectNode (per-node prop values + explain chain +
                     chain trace + computed-vs-cached + install warnings)
+src/semantics.ts    ADR-003 M-R0: SemanticSnapshot (wire-ready value data:
+                    sound/measure maps, directives, receded lines,
+                    diagnostics) + pure resolvers (soundRangesAt,
+                    selectionHighlightsAt) replicating nodesInRanges range
+                    algebra — proven ≡ tree queries by exhaustive sweep
+                    (tests/semantics.test.ts)
 src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply = dispatch edits)
 src/selection.ts    selectedNodes (column selections!), midiOfSelection
 src/export.ts       musicXml(state), midiFile(state), importMusicXml(state, xml)
