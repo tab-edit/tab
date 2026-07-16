@@ -10,8 +10,13 @@ WeakMap, TabFragments reconstruct from CM's TreeFragments via `TabFragment.pairA
 
 ```bash
 npm run type-check && npm test   # the gate — run before EVERY commit
+npm run verify:remote            # LOCAL E2E of ADR-003: real browser → ws →
+                                 # remote/host Session (spawns the sibling
+                                 # dev server; demo ?remote=ws://… by hand)
 npm install                      # refresh COPIED @tab-edit/{ast,plugins,parse}
                                  # (rebuild ast AND plugins first: npm run build in each!)
+                                 # @tab-edit/protocol comes from the remote
+                                 # repo ROOT (git+ssh)
 ```
 
 ## Critical facts
@@ -39,6 +44,18 @@ src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
                     counts — the perf-diagnosis surface; call AFTER reads),
                     inspectNode (per-node prop values + explain chain +
                     chain trace + computed-vs-cached + install warnings)
+src/remote.ts       ADR-003 M-R1: RemoteClient (view-free core — start/
+                    applyTransaction/flush/query/receive — + EditorView
+                    glue via .extension), mapSnapshot (§5.1 R2/R5/R6 range
+                    algebra), remoteSnapshotField (maps through every local
+                    edit, replaced atomically per frame), transports:
+                    sessionTransport (loopback, JSON-round-trips = I4),
+                    chaosTransport (seeded pump-time drop/reorder; never
+                    drops hello/helloOk — transport contract), webSocket-
+                    Transport. tests/remote.test.ts drives it against a
+                    NAIVE-COLD protocol oracle (deterministic; CM
+                    incremental slicing makes #17 flake otherwise); the
+                    REAL-Session differential lives in remote/host.
 src/semantics.ts    ADR-003 M-R0: SemanticSnapshot (wire-ready value data:
                     sound/measure maps, directives, receded lines,
                     diagnostics) — home of the pure tree-reading CORES
@@ -56,6 +73,9 @@ src/decorations.ts  ViewPlugins ONLY since M-R0 — chord/selection highlights,
                     SNAPSHOT data (build() never touches tree or engine);
                     rebuilds also on snapshot-identity change (closes the
                     stale-after-async-reparse gap)
-src/index.ts        tablature() — the whole system as one extension
+src/index.ts        tablature() — the whole system as one extension;
+                    snapshotOf routes through the snapshotSource FACET
+                    (default = local engine; RemoteClient overrides it —
+                    every decoration/lint surface swaps origin at once)
 tests/adapter.test.ts  E2E on real CM machinery
 ```
