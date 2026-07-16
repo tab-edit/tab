@@ -18,7 +18,8 @@
 //  11. first contact teaches: pane subtitle says click/cursor → values, and a
 //      teaching hint shows while the cursor is NOT on a music node (fresh
 //      load / prose), disappearing once it is
-//  12. the run produces zero console/page errors
+//  12. app branding uses the supplied mark in the topbar and browser chrome
+//  13. the run produces zero console/page errors
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 const { chromium } = require("playwright");
@@ -66,6 +67,33 @@ async function startServer() {
 
     await page.goto(server.url, { waitUntil: "networkidle" });
     await page.waitForFunction(() => !!window.view);
+
+    // ——— app identity: one accessible lockup + the same mark in browser chrome ———
+    const branding = await page.evaluate(() => {
+      const heading = document.querySelector(".brand");
+      const mark = document.querySelector(".brand-mark");
+      const favicon = document.querySelector('link[rel="icon"]');
+      return {
+        title: document.title,
+        headingText: heading?.textContent?.trim(),
+        headingLevel: heading?.tagName,
+        markAlt: mark?.getAttribute("alt"),
+        markLoaded: mark instanceof HTMLImageElement && mark.complete && mark.naturalWidth > 0,
+        markSrc: mark instanceof HTMLImageElement ? new URL(mark.src).pathname : "",
+        faviconSrc: favicon instanceof HTMLLinkElement ? new URL(favicon.href).pathname : "",
+      };
+    });
+    check(branding.title === "tab-edit — tablature editor", `branded document title (${branding.title})`);
+    check(
+      branding.headingLevel === "H1" && branding.headingText === "tab-edit",
+      "topbar brand remains the page's accessible h1"
+    );
+    check(branding.markAlt === "", "decorative brand mark does not duplicate the tab-edit name");
+    check(branding.markLoaded, "topbar brand mark loads successfully");
+    check(
+      branding.markSrc === branding.faviconSrc && branding.markSrc.endsWith("/tab-edit-logo.svg"),
+      `topbar and favicon share the canonical logo asset (${branding.markSrc || "missing"})`
+    );
 
     // ——— 1. pane order ———
     const order = await page.$$eval(".side-panes > section.pane", (els) =>

@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1254"
+  height="1254"
+  viewBox="0 0 1254 1254"
+  fill="none"
+  role="img"
+  aria-labelledby="logo-title logo-description"
+  shape-rendering="geometricPrecision"
+>
+  <title id="logo-title">tab-edit</title>
+  <desc id="logo-description">A playhead scrubbing through four lines of guitar tablature, with an amber active edit cell.</desc>
+
+  <defs>
+    <!-- The outer field retains the very subtle cool-black vignette of the source artwork. -->
+    <radialGradient id="canvas" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(630 548) rotate(90) scale(846 874)">
+      <stop offset="0" stop-color="#171C25"/>
+      <stop offset="0.64" stop-color="#141922"/>
+      <stop offset="1" stop-color="#10151D"/>
+    </radialGradient>
+
+    <!-- A near-flat tile with just enough light falloff to preserve the premium app-icon depth. -->
+    <linearGradient id="tile-base" x1="191" y1="115" x2="1087" y2="1138" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#202631"/>
+      <stop offset="0.48" stop-color="#1C212B"/>
+      <stop offset="1" stop-color="#1A1F28"/>
+    </linearGradient>
+    <radialGradient id="tile-light" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(390 265) rotate(47) scale(760 835)">
+      <stop offset="0" stop-color="#2A303C" stop-opacity="0.20"/>
+      <stop offset="0.58" stop-color="#222834" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#121720" stop-opacity="0.15"/>
+    </radialGradient>
+
+    <linearGradient id="string" x1="0" y1="443" x2="0" y2="827" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7F3ED"/>
+      <stop offset="0.48" stop-color="#F1ECE4"/>
+      <stop offset="1" stop-color="#E9E3DC"/>
+    </linearGradient>
+    <linearGradient id="string-sheen" x1="229" y1="0" x2="1029" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0.46" stop-color="#FFFFFF" stop-opacity="0.19"/>
+      <stop offset="0.70" stop-color="#FFFFFF" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <linearGradient id="playhead" x1="617" y1="0" x2="642" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8D97A5"/>
+      <stop offset="0.45" stop-color="#A3ACB9"/>
+      <stop offset="1" stop-color="#87919F"/>
+    </linearGradient>
+    <linearGradient id="playhead-light" x1="0" y1="286" x2="0" y2="970" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.17"/>
+      <stop offset="0.10" stop-color="#FFFFFF" stop-opacity="0.04"/>
+      <stop offset="0.88" stop-color="#000000" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.13"/>
+    </linearGradient>
+
+    <linearGradient id="active-cell" x1="599" y1="608" x2="661" y2="678" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFC12B"/>
+      <stop offset="0.52" stop-color="#FBAF19"/>
+      <stop offset="1" stop-color="#F3A313"/>
+    </linearGradient>
+    <linearGradient id="cell-highlight" x1="0" y1="606" x2="0" y2="680" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="0.28" stop-color="#FFFFFF" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <filter id="tile-shadow" x="32" y="39" width="1200" height="1171" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#05070B" flood-opacity="0.42"/>
+    </filter>
+    <filter id="string-shadow" x="218" y="434" width="822" height="405" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#05070B" flood-opacity="0.33"/>
+    </filter>
+    <filter id="playhead-shadow" x="605" y="274" width="49" height="709" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#05070B" flood-opacity="0.38"/>
+    </filter>
+    <filter id="cell-shadow" x="576" y="591" width="106" height="105" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#06080C" flood-opacity="0.45"/>
+    </filter>
+    <clipPath id="tile-clip">
+      <rect x="90" y="84" width="1084" height="1061" rx="236"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1254" height="1254" fill="url(#canvas)"/>
+
+  <g filter="url(#tile-shadow)">
+    <rect x="90" y="84" width="1084" height="1061" rx="236" fill="url(#tile-base)"/>
+  </g>
+  <g clip-path="url(#tile-clip)">
+    <rect x="90" y="84" width="1084" height="1061" fill="url(#tile-light)"/>
+  </g>
+
+  <!-- Four tab strings. Their inner ends remain square, reinforcing an interrupted timeline. -->
+  <g filter="url(#string-shadow)">
+    <path d="M235 443H597V467H235C231.686 467 229 464.314 229 461V449C229 445.686 231.686 443 235 443Z" fill="url(#string)"/>
+    <path d="M661 443H1023C1026.31 443 1029 445.686 1029 449V461C1029 464.314 1026.31 467 1023 467H661V443Z" fill="url(#string)"/>
+
+    <path d="M235 563H597V587H235C231.686 587 229 584.314 229 581V569C229 565.686 231.686 563 235 563Z" fill="url(#string)"/>
+    <path d="M661 563H1023C1026.31 563 1029 565.686 1029 569V581C1029 584.314 1026.31 587 1023 587H661V563Z" fill="url(#string)"/>
+
+    <path d="M235 683H577C584.1 683 590.97 686.02 595.78 691.24L597 692.57V707H235C231.686 707 229 704.314 229 701V689C229 685.686 231.686 683 235 683Z" fill="url(#string)"/>
+    <path d="M661 692.57L662.22 691.24C667.03 686.02 673.9 683 681 683H1023C1026.31 683 1029 685.686 1029 689V701C1029 704.314 1026.31 707 1023 707H661V692.57Z" fill="url(#string)"/>
+
+    <path d="M235 803H597V827H235C231.686 827 229 824.314 229 821V809C229 805.686 231.686 803 235 803Z" fill="url(#string)"/>
+    <path d="M661 803H1023C1026.31 803 1029 805.686 1029 809V821C1029 824.314 1026.31 827 1023 827H661V803Z" fill="url(#string)"/>
+  </g>
+
+  <!-- A barely perceptible longitudinal sheen keeps the warm strings from reading as flat white bars. -->
+  <g opacity="0.45">
+    <path d="M235 444H597V449H229C229 446.239 231.239 444 234 444H235Z" fill="url(#string-sheen)"/>
+    <path d="M661 444H1024C1026.76 444 1029 446.239 1029 449H661V444Z" fill="url(#string-sheen)"/>
+    <path d="M235 564H597V569H229C229 566.239 231.239 564 234 564H235Z" fill="url(#string-sheen)"/>
+    <path d="M661 564H1024C1026.76 564 1029 566.239 1029 569H661V564Z" fill="url(#string-sheen)"/>
+    <path d="M235 684H577C583 684 588 686 592 689H229C229 686.239 231.239 684 234 684H235Z" fill="url(#string-sheen)"/>
+    <path d="M667 689C671 686 676 684 681 684H1024C1026.76 684 1029 686.239 1029 689H667Z" fill="url(#string-sheen)"/>
+    <path d="M235 804H597V809H229C229 806.239 231.239 804 234 804H235Z" fill="url(#string-sheen)"/>
+    <path d="M661 804H1024C1026.76 804 1029 806.239 1029 809H661V804Z" fill="url(#string-sheen)"/>
+  </g>
+
+  <!-- The playhead is deliberately split around the selected cell, as in the source mark. -->
+  <g filter="url(#playhead-shadow)">
+    <rect x="617" y="285" width="25" height="308" rx="12.5" fill="url(#playhead)"/>
+    <rect x="617" y="691" width="25" height="280" rx="12.5" fill="url(#playhead)"/>
+  </g>
+  <g opacity="0.62">
+    <rect x="617" y="285" width="25" height="308" rx="12.5" fill="url(#playhead-light)"/>
+    <rect x="617" y="691" width="25" height="280" rx="12.5" fill="url(#playhead-light)"/>
+  </g>
+
+  <g filter="url(#cell-shadow)">
+    <rect x="590" y="605" width="79" height="75" rx="17" fill="url(#active-cell)"/>
+  </g>
+  <rect x="590.5" y="605.5" width="78" height="74" rx="16.5" fill="url(#cell-highlight)"/>
+</svg>

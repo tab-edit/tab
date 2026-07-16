@@ -39,11 +39,22 @@ body {
   background: var(--bg-raised);
 }
 
-.topbar h1 {
+.brand {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
   font-size: 15px;
   margin: 0;
   font-weight: 600;
   letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.brand-mark {
+  display: block;
+  width: 32px;
+  height: 32px;
 }
 
 .actions {

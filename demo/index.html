@@ -3,12 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>tab-edit demo</title>
+    <meta
+      name="description"
+      content="Edit, inspect, play, and export guitar tablature with tab-edit."
+    />
+    <meta name="theme-color" content="#141922" />
+    <title>tab-edit — tablature editor</title>
+    <link rel="icon" type="image/svg+xml" href="./tab-edit-logo.svg" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <header class="topbar">
-      <h1>tab-edit</h1>
+      <h1 class="brand">
+        <img
+          class="brand-mark"
+          src="./tab-edit-logo.svg"
+          width="32"
+          height="32"
+          alt=""
+        />
+        <span>tab-edit</span>
+      </h1>
       <select id="sample-picker" class="sample-picker" title="load a sample tab"></select>
       <div class="actions">
         <details class="menu" id="file-menu">
