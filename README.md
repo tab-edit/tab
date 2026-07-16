@@ -2,8 +2,8 @@
 
 **The complete tablature editing system for CodeMirror 6.** Live incremental parsing
 with reuse, a semantic layer (instruments, pitch, exact rational time, techniques),
-lint with one-click fixes, column-selection queries, and MusicXML/MIDI export — as
-one extension.
+lint with one-click fixes, column selections that map to chords, audio playback,
+live sheet-music preview, and MusicXML/MIDI export — as one extension.
 
 ```ts
 import { basicSetup, EditorView } from "codemirror";
@@ -19,49 +19,74 @@ midiFile(view.state);        // → playable format-0 SMF bytes
 midiOfSelection(view.state); // → events for the (column) selection
 ```
 
+## See it: the demo app
+
+```bash
+npm install && npm run demo
+```
+
+A full editor with a live **sheet pane** (OpenSheetMusicDisplay rendering
+`musicXml(state)` as you type), selection-aware **playback** with a score-following
+cursor, an **inspector** (per-node semantic values and why they computed), lint
+diagnostics with working fix buttons, sample tabs, and export downloads. It is also
+the verification harness: `npm run verify:demo` drives it with Playwright.
+
+## How it works
+
 - **One parse, two consumers**: CodeMirror gets the base Lezer tree (native syntax
-  highlighting, folding), the semantic TabTree rides along — zero double work.
+  highlighting, folding), the semantic `TabTree` rides along — zero double work.
+- **Edits carry**: editing one section reuses every other section's parse artifacts
+  by identity and its semantic values through proven carry gates (no stale state,
+  by theorem — see the workspace ADRs).
+- **Everything renders snapshots**: decorations and lint read plain-data
+  `SemanticSnapshot` values, not the engine — which is what makes remote mode
+  (below) a one-line swap.
 - **Lint fixes are actions**: "Name this line 'D'" injects the text, reparses
   incrementally, diagnostic clears — all through CM's normal transaction flow, undoable.
 - **Column selections are first-class**: rectangular selections (one range per line)
   map straight to chords/sounds via `selectedNodes(state, "Sound")`.
-- **Edits carry**: editing one section reuses every other section's parse artifacts
-  BY IDENTITY and its semantic values through proven carry gates (no stale state,
-  by theorem — see the workspace ADRs).
 
-## Theming (theme packs)
+## Remote mode
 
-The editor's look is data. A theme pack is a `TabThemeSpec` — one flat record of
-this editor's semantic color slots (`fret`, `lineName`, `technique`, `lattice`,
-`prose`, …) — compiled by `tabTheme()` into a CM extension:
+The same editor can run with the semantic engine on a server instead of in the
+bundle: `remoteSemantics()` installs a `RemoteClient` that streams your edits to a
+per-document session (see the [remote repo](https://github.com/tab-edit/remote)) and
+feeds every decoration/lint/export surface from wire snapshots. Typing stays 100%
+local. Try it: start the remote repo's dev server, then open the demo with
+`?remote=ws://localhost:8787`. `npm run verify:remote` runs the browser→WebSocket→
+session E2E.
+
+## Theming
+
+The editor's look is data: a theme pack is one flat `TabThemeSpec` record of semantic
+color slots, compiled by `tabTheme()` into a CM extension —
 
 ```ts
 import { tabTheme, tablature, type TabThemeSpec } from "@tab-edit/cm";
-
-const midnight: TabThemeSpec = {
-  dark: true,
-  colors: {
-    lattice: "#6a7280", fret: "#bfd3ee", lineName: "#9fb3ba",
-    technique: "#c2a884", embellishment: "#afa8c9", modifier: "#c2a884",
-    scaffold: "#868d99", comment: "#7d8590", prose: "#7d8590",
-    directiveUnderline: "#5b9dfa73", directiveText: "#d7dbe0",
-  },
-};
-
+const midnight: TabThemeSpec = { dark: true, colors: { fret: "#bfd3ee", lattice: "#6a7280", /* … */ } };
 new EditorView({ extensions: [basicSetup, tablature({ theme: tabTheme(midnight) })] });
 ```
 
-Publish the spec (or the compiled extension) as an npm package and it installs like
-any VS Code theme. Two design rules the defaults encode: ~70% of tab characters are
-dash/barline **lattice**, so the theme dims untagged content and lets tagged tokens
-carry brightness (notes pop by contrast, not by rainbow); and hue stays desaturated
-so the editor matches restrained host UIs.
+Every slot doubles as a CSS variable (`--tabedit-fret`, …) so hosts can retheme with
+plain CSS, no code. The defaults dim the ~70% of tab characters that are dash/barline
+lattice so notes pop by contrast, not by rainbow. Full slot list: `src/highlight.ts`.
 
-**No-JS channel**: every slot is also a CSS variable — hosts can retheme with plain
-CSS, no code:
+## Developing
 
-```css
-.cm-editor { --tabedit-fret: #ffd9a0; --tabedit-lattice: #5f6672; }
+```bash
+npm run type-check && npm test   # headless suites on real CM machinery
+npm run verify:demo              # Playwright over the running demo
+npm run bump:engine              # pull pushed engine changes (git deps @ main)
 ```
 
-Headless-tested against real `@codemirror/state`/`@codemirror/language` machinery.
+Engine repos install from GitHub `@ main` — local changes to `parse`/`ast`/`plugins`
+reach this repo only when pushed.
+
+## Where to jump
+
+- **[CLAUDE.md](CLAUDE.md)** — the source-file map (which file owns decorations,
+  lint, remote, exports) plus commands and critical facts.
+- **Design canon** (workspace `../docs/`): ADR-001 Appendix A (the wiring this repo
+  implements literally), ADR-003 + `design/remote-user-flows.md` (remote mode).
+- **The demo source** ([demo/main.ts](demo/main.ts)) — a complete, real integration
+  to crib from.
