@@ -11,7 +11,8 @@
     "test": "jest",
     "demo": "vite demo",
     "demo:build": "vite build demo",
-    "verify:demo": "node demo/verify-demo.cjs"
+    "verify:demo": "node demo/verify-demo.cjs",
+    "bump:engine": "npm update @tab-edit/parse @tab-edit/ast @tab-edit/plugins"
   },
   "dependencies": {
     "@codemirror/language": "^6.10.0",
@@ -19,9 +20,9 @@
     "@codemirror/state": "^6.4.0",
     "@codemirror/view": "^6.26.0",
     "@lezer/common": "^1.2.0",
-    "@tab-edit/ast": "file:../ast",
-    "@tab-edit/parse": "file:../parse",
-    "@tab-edit/plugins": "file:../plugins"
+    "@tab-edit/ast": "git+ssh://git@github.com/tab-edit/ast.git",
+    "@tab-edit/parse": "git+ssh://git@github.com/tab-edit/parse.git",
+    "@tab-edit/plugins": "git+ssh://git@github.com/tab-edit/plugins.git"
   },
   "devDependencies": {
     "@codemirror/search": "^6.7.1",
