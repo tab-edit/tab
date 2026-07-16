@@ -1,7 +1,7 @@
 {
   "name": "@tab-edit/cm",
   "version": "0.0.0",
-  "description": "CodeMirror 6 adapter for tab-edit — TabLanguage (ADR-001 Appendix A wiring 2), semantic state layer, lint with fixes, selection queries, exports",
+  "description": "CodeMirror 6 adapter for tab-edit \u2014 TabLanguage (ADR-001 Appendix A wiring 2), semantic state layer, lint with fixes, selection queries, exports",
   "license": "ISC",
   "author": "Stanley Ihesiulo",
   "type": "module",
@@ -12,7 +12,8 @@
     "demo": "vite demo",
     "demo:build": "vite build demo",
     "verify:demo": "node demo/verify-demo.cjs",
-    "bump:engine": "npm update @tab-edit/parse @tab-edit/ast @tab-edit/plugins"
+    "bump:engine": "npm update @tab-edit/parse @tab-edit/ast @tab-edit/plugins",
+    "verify:remote": "node demo/verify-remote.cjs"
   },
   "dependencies": {
     "@codemirror/language": "^6.10.0",

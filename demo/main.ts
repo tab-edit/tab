@@ -24,10 +24,12 @@ import {
   inspectNode,
   midiFile,
   musicXml,
+  RemoteClient,
   selectionNodeHighlight,
   tablature,
   tabStateDiagnostics,
   tabTree,
+  webSocketTransport,
   type ComputeReport,
   type PropInspection,
 } from "../src/index.js";
@@ -136,6 +138,30 @@ const highlightSelectionCompartment = new Compartment();
 const columnSelectionExtension = rectangularSelection({ eventFilter: (e) => e.detail === 1 });
 const highlightSelectionExtension = selectionNodeHighlight();
 
+// ——— ADR-003 M-R1 remote mode (a TESTING VEHICLE, not the product client:
+// the local engine still ships in this bundle for the dev panes; the
+// engine-free client entry is M-R2's bundle split). `?remote=ws://…` points
+// every SEMANTIC surface — lint tints, chord/selection highlights,
+// directive underlines, prose recession — at a live session host over the
+// wire, and the export buttons become protocol queries. Typing and syntax
+// highlighting stay local (I3), so the editor feels identical.
+// Run one locally: cd remote/host && npm run dev-server
+const remoteUrl = new URLSearchParams(location.search).get("remote");
+const remote = remoteUrl ? new RemoteClient(webSocketTransport(remoteUrl)) : null;
+if (remote) {
+  const badge = document.createElement("span");
+  badge.id = "remote-status";
+  badge.style.cssText =
+    "margin-left:auto;font-size:11px;opacity:.75;padding:2px 8px;border:1px solid #555;border-radius:10px";
+  document.querySelector(".topbar")?.appendChild(badge);
+  setInterval(() => {
+    badge.textContent =
+      remote.status === "live"
+        ? `remote · live${remote.staleBy > 0 ? ` · syncing ${remote.staleBy}` : " · synced"}`
+        : "remote · connecting";
+  }, 250);
+}
+
 const view = new EditorView({
   doc: INITIAL_DOC,
   extensions: [
@@ -169,6 +195,7 @@ const view = new EditorView({
       { dark: true }
     ),
     tablature({ columnSelection: false, highlightSelection: false }),
+    ...(remote ? [remote.extension] : []),
     columnSelectionCompartment.of(columnSelectionExtension),
     highlightSelectionCompartment.of(highlightSelectionExtension),
     lintGutter(),
@@ -510,7 +537,7 @@ const sayTip = (text: string, holdMs = 6000): void => {
 };
 
 // Exposed for console poking and the Playwright verify loop.
-Object.assign(globalThis, { view });
+Object.assign(globalThis, { view, remoteClient: remote });
 
 // Topbar toggles: column select (plain-drag rectangular selection) and
 // selection-node highlighting (Sounds + Measures the selection touches).
@@ -1409,10 +1436,16 @@ importFileInput.addEventListener("change", async () => {
   }
 });
 
-document.getElementById("export-xml")!.addEventListener("click", () => {
-  downloadBlob(musicXml(view.state), "tab.musicxml", "application/vnd.recordare.musicxml+xml");
+// Exports go over the wire in remote mode — request/response queries
+// computed at ≥ the version on screen (ADR-003 R3), local reads otherwise.
+document.getElementById("export-xml")!.addEventListener("click", async () => {
+  const xml = remote ? ((await remote.query("musicXml")) as string) : musicXml(view.state);
+  downloadBlob(xml, "tab.musicxml", "application/vnd.recordare.musicxml+xml");
 });
 
-document.getElementById("export-midi")!.addEventListener("click", () => {
-  downloadBlob(midiFile(view.state), "tab.mid", "audio/midi");
+document.getElementById("export-midi")!.addEventListener("click", async () => {
+  const bytes = remote
+    ? Uint8Array.from(atob((await remote.query("midiFile")) as string), (c) => c.charCodeAt(0))
+    : midiFile(view.state);
+  downloadBlob(bytes, "tab.mid", "audio/midi");
 });
