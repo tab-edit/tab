@@ -36,8 +36,8 @@ the verification harness: `npm run verify:demo` drives it with Playwright.
 - **One parse, two consumers**: CodeMirror gets the base Lezer tree (native syntax
   highlighting, folding), the semantic `TabTree` rides along — zero double work.
 - **Edits carry**: editing one section reuses every other section's parse artifacts
-  by identity and its semantic values through proven carry gates (no stale state,
-  by theorem — see the workspace ADRs).
+  by identity and its semantic values through proven carry gates — no stale
+  state, ever.
 - **Everything renders snapshots**: decorations and lint read plain-data
   `SemanticSnapshot` values, not the engine — which is what makes remote mode
   (below) a one-line swap.
@@ -86,7 +86,7 @@ reach this repo only when pushed.
 
 - **[CLAUDE.md](CLAUDE.md)** — the source-file map (which file owns decorations,
   lint, remote, exports) plus commands and critical facts.
-- **Design canon** (workspace `../docs/`): ADR-001 Appendix A (the wiring this repo
-  implements literally), ADR-003 + `design/remote-user-flows.md` (remote mode).
 - **The demo source** ([demo/main.ts](demo/main.ts)) — a complete, real integration
   to crib from.
+- **`tests/`** — headless suites on real CodeMirror machinery; the remote suite
+  doubles as the protocol's client-side behavioral spec.
