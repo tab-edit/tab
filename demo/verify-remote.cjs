@@ -160,7 +160,43 @@ async function startVite() {
       "musicXml reflects the just-typed title (server saw the changeset)"
     );
 
-    // ——— 6. clean run ———
+    // ——— 6. dev-comparison toggle: wire → local → wire, same session ———
+    // Blindness is observed at the SERVER (a detached client records
+    // nothing, so its own staleBy stays 0 by definition): type into the
+    // title while OFF, then ask the host — it must not have seen it.
+    await page.evaluate(() => {
+      const t = document.getElementById("toggle-remote");
+      t.checked = false;
+      t.dispatchEvent(new Event("change"));
+    });
+    await page.evaluate(() => {
+      const at = window.view.state.doc.toString().indexOf("BlackbirdX") + "BlackbirdX".length;
+      window.view.dispatch({ changes: { from: at, insert: "Y" }, userEvent: "input.type" });
+    });
+    const localMarks = await page.locator(".cm-tabDirective").count();
+    check(localMarks >= 2, `toggled OFF: overlays render from the LOCAL engine (${localMarks})`);
+    const xmlBlind = await page.evaluate(() => window.remoteClient.query("musicXml"));
+    check(
+      xmlBlind.includes("BlackbirdX") && !xmlBlind.includes("BlackbirdXY"),
+      "toggled OFF: the host never saw the blind-window edit"
+    );
+    await page.evaluate(() => {
+      const t = document.getElementById("toggle-remote");
+      t.checked = true;
+      t.dispatchEvent(new Event("change"));
+    });
+    // Re-enable re-hellos with the full current text — the blind-window
+    // edit is recovered by construction.
+    await page.waitForFunction(() => window.remoteClient.staleBy === 0, { timeout: 10_000 });
+    const xmlBack = await page.evaluate(() => window.remoteClient.query("musicXml"));
+    check(
+      xmlBack.includes("BlackbirdXY"),
+      "toggled back ON: fresh hello recovered the blind-window edit"
+    );
+    const backMarks = await page.locator(".cm-tabDirective").count();
+    check(backMarks >= 2, `toggled back ON: wire overlays render (${backMarks})`);
+
+    // ——— 7. clean run ———
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {
     await browser.close();

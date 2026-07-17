@@ -148,6 +148,14 @@ const highlightSelectionExtension = selectionNodeHighlight();
 // Run one locally: cd remote/host && npm run dev-server
 const remoteUrl = new URLSearchParams(location.search).get("remote");
 const remote = remoteUrl ? new RemoteClient(webSocketTransport(remoteUrl)) : null;
+// Dev-comparison toggle (Stan 2026-07-16): flip semantics between wire and
+// local engine LIVE, same document. Capture .extension ONCE — re-adding the
+// same value re-instantiates the glue ViewPlugin, whose setup re-hellos with
+// the full current text, so edits made while "off" are recovered by
+// construction (hello IS the universal recovery move).
+const remoteCompartment = new Compartment();
+const remoteExtension = remote ? remote.extension : [];
+let remoteEnabled = remote !== null;
 if (remote) {
   const badge = document.createElement("span");
   badge.id = "remote-status";
@@ -155,8 +163,9 @@ if (remote) {
     "margin-left:auto;font-size:11px;opacity:.75;padding:2px 8px;border:1px solid #555;border-radius:10px";
   document.querySelector(".topbar")?.appendChild(badge);
   setInterval(() => {
-    badge.textContent =
-      remote.status === "live"
+    badge.textContent = !remoteEnabled
+      ? "remote · off (local semantics)"
+      : remote.status === "live"
         ? `remote · live${remote.staleBy > 0 ? ` · syncing ${remote.staleBy}` : " · synced"}`
         : "remote · connecting";
   }, 250);
@@ -195,7 +204,7 @@ const view = new EditorView({
       { dark: true }
     ),
     tablature({ columnSelection: false, highlightSelection: false }),
-    ...(remote ? [remote.extension] : []),
+    remoteCompartment.of(remoteExtension),
     columnSelectionCompartment.of(columnSelectionExtension),
     highlightSelectionCompartment.of(highlightSelectionExtension),
     lintGutter(),
@@ -559,6 +568,21 @@ highlightSelectionToggle.addEventListener("change", () => {
     ),
   });
 });
+// Remote↔local comparison toggle — visible only when a session host is
+// configured. OFF removes the snapshotSource override, so every semantic
+// surface falls back to the LOCAL engine in the same reconfigure
+// transaction; ON re-adds the extension, whose fresh glue plugin re-hellos
+// with the full current text (edits made while off are recovered).
+const remoteToggle = document.getElementById("toggle-remote") as HTMLInputElement;
+if (remote) {
+  document.getElementById("toggle-remote-row")!.hidden = false;
+  remoteToggle.addEventListener("change", () => {
+    remoteEnabled = remoteToggle.checked;
+    view.dispatch({
+      effects: remoteCompartment.reconfigure(remoteEnabled ? remoteExtension : []),
+    });
+  });
+}
 
 // Side panes: header click collapses.
 for (const pane of document.querySelectorAll(".side-panes .pane")) {
