@@ -10,40 +10,29 @@
 //   a tree. Their range algebra replicates TabTree.nodesInRanges
 //   (ast core/tree.ts) — keep the two in lockstep.
 
-import { Facet, type EditorState } from "@codemirror/state";
-import type { Diagnostic, TabTree } from "@tab-edit/ast";
+import type { EditorState } from "@codemirror/state";
+import type { TabTree } from "@tab-edit/ast";
 import { blockKind, directiveEntries, segmentKind } from "@tab-edit/plugins";
 import { tabTree } from "./language.js";
 import { readTabProp, tabStateDiagnostics } from "./state-layer.js";
+import type { NodeRanges, SemanticSnapshot } from "./snapshot-model.js";
 
-export interface SnapshotRange {
-  readonly from: number;
-  readonly to: number;
-}
-
-/** One node's full range set (multi-range = chord Sound / multi-line
- *  Measure), in the tree's pre-order — order is part of the contract
- *  (cursor resolution returns the FIRST pre-order hit). */
-export interface NodeRanges {
-  readonly ranges: readonly SnapshotRange[];
-}
-
-export interface DirectiveSpan {
-  readonly from: number;
-  readonly to: number;
-  readonly key: string;
-  readonly value: string;
-}
-
-export interface SemanticSnapshot {
-  /** Every Sound's range set, pre-order — the sound map (ADR-003 §4). */
-  readonly sounds: readonly NodeRanges[];
-  /** Every Measure's range set, pre-order. */
-  readonly measures: readonly NodeRanges[];
-  readonly directives: readonly DirectiveSpan[];
-  readonly recededLineStarts: readonly number[];
-  readonly diagnostics: readonly Diagnostic[];
-}
+// The value model + resolvers + snapshotSource seam live in
+// snapshot-model.ts (pure, engine-free — the slim client entry's half);
+// re-exported here so the fat surface is unchanged.
+export {
+  selectionHighlightsAt,
+  snapshotOf,
+  snapshotSource,
+  soundRangesAt,
+} from "./snapshot-model.js";
+export type {
+  DirectiveSpan,
+  NodeRanges,
+  SemanticSnapshot,
+  SnapshotRange,
+  SnapshotSource,
+} from "./snapshot-model.js";
 
 // ─── Producers (LOCAL: in-process engine reads) ──────────────────────────
 
@@ -183,7 +172,7 @@ export function computeSnapshot(state: EditorState): SemanticSnapshot | null {
 /** Snapshot rides the tree the way the TabTree rides the base tree: one
  *  compute per tree, cached by identity. Selection/viewport updates hit the
  *  cache; a reparse (new tree) recomputes lazily on first read. This is the
- *  LOCAL SemanticsClient. */
+ *  LOCAL SemanticsClient — tablature() installs it as the snapshotSource. */
 const snapshots = new WeakMap<TabTree, SemanticSnapshot>();
 export function localSnapshotOf(state: EditorState): SemanticSnapshot | null {
   const tree = tabTree(state);
@@ -193,67 +182,4 @@ export function localSnapshotOf(state: EditorState): SemanticSnapshot | null {
   const snap = computeSnapshot(state)!;
   snapshots.set(tree, snap);
   return snap;
-}
-
-/** Where snapshots come from — the SemanticsClient seam (ADR-003 M-R1).
- *  Nothing installed = the local in-process engine; a RemoteClient installs
- *  a source reading its wire-fed overlay store. Every consumer (decorations,
- *  lint) goes through snapshotOf, so swapping the source swaps the origin
- *  of ALL semantic rendering at once. */
-export type SnapshotSource = (state: EditorState) => SemanticSnapshot | null;
-export const snapshotSource = Facet.define<SnapshotSource, SnapshotSource | null>({
-  combine: (sources) => (sources.length ? sources[0] : null),
-});
-
-export function snapshotOf(state: EditorState): SemanticSnapshot | null {
-  const source = state.facet(snapshotSource);
-  return source ? source(state) : localSnapshotOf(state);
-}
-
-// ─── Resolvers (pure data — the remote client's 0 ms half) ───────────────
-
-// Node range [a,b) vs selection [f,t): carets probe containment; zero-width
-// node ranges count when their point lies inside; otherwise plain half-open
-// overlap. Verbatim TabTree.nodesInRanges (ast core/tree.ts).
-const overlaps = (a: number, b: number, f: number, t: number): boolean =>
-  f === t ? a <= f && f < b : a === b ? f <= a && a < t : a < t && f < b;
-
-const nodeMatches = (
-  entry: NodeRanges,
-  spans: readonly { readonly from: number; readonly to: number }[]
-): boolean =>
-  entry.ranges.some(({ from, to }) => spans.some((s) => overlaps(from, to, s.from, s.to)));
-
-/** Cursor→chord from snapshot data: the range set of the first (pre-order)
- *  Sound containing the caret — soundRangesAtCursor without a tree. */
-export function soundRangesAt(
-  snapshot: SemanticSnapshot,
-  head: number
-): { from: number; to: number }[] {
-  const probe = [{ from: head, to: head }];
-  const hit = snapshot.sounds.find((s) => nodeMatches(s, probe));
-  return hit ? hit.ranges.map((r) => ({ ...r })) : [];
-}
-
-/** Selection highlights from snapshot data: every range of every Sound and
- *  Measure the selection intersects — selectedNodeHighlightRanges without a
- *  tree. Pass ALL selection ranges (carets included: they probe containment
- *  exactly as nodesInRanges treats them); a selection with no non-empty
- *  range highlights nothing, matching the live highlighter's contract. */
-export function selectionHighlightsAt(
-  snapshot: SemanticSnapshot,
-  selection: readonly { readonly from: number; readonly to: number }[]
-): { from: number; to: number; cls: string }[] {
-  if (!selection.some((r) => r.to > r.from)) return [];
-  const out: { from: number; to: number; cls: string }[] = [];
-  for (const [entries, cls] of [
-    [snapshot.sounds, "cm-tab-selected-sound"],
-    [snapshot.measures, "cm-tab-selected-measure"],
-  ] as const) {
-    for (const entry of entries) {
-      if (!nodeMatches(entry, selection)) continue;
-      for (const r of entry.ranges) out.push({ from: r.from, to: r.to, cls });
-    }
-  }
-  return out;
 }

@@ -13,16 +13,7 @@ import {
   selectionHighlightsAt,
   snapshotOf,
   soundRangesAt,
-} from "./semantics.js";
-
-// Re-exported from their new home (public API unchanged; semantics.ts owns
-// the pure tree-reading cores now — they produce the snapshot).
-export {
-  directiveAnnotationRanges,
-  recededLineStarts,
-  selectedNodeHighlightRanges,
-  soundRangesAtCursor,
-} from "./semantics.js";
+} from "./snapshot-model.js";
 
 const snapshotChanged = (update: ViewUpdate): boolean =>
   snapshotOf(update.state) !== snapshotOf(update.startState);

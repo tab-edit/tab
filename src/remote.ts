@@ -16,6 +16,7 @@
 
 import {
   ChangeSet,
+  Prec,
   StateEffect,
   StateField,
   Text,
@@ -32,7 +33,7 @@ import {
   type SnapshotPayload,
   type TextEditJSON,
 } from "@tab-edit/protocol";
-import { snapshotSource, type SemanticSnapshot } from "./semantics.js";
+import { snapshotSource, type SemanticSnapshot } from "./snapshot-model.js";
 
 // ─── Mapping (the R2/R5/R6 range algebra) ────────────────────────────────
 
@@ -124,7 +125,9 @@ export const remoteSnapshotField = StateField.define<SemanticSnapshot | null>({
 export function remoteSemantics(): Extension {
   return [
     remoteSnapshotField,
-    snapshotSource.of((state: EditorState) => state.field(remoteSnapshotField)),
+    // Prec.highest: the wire-fed store outranks the local source wherever
+    // this extension sits in the tree (see snapshotSource's contract).
+    Prec.highest(snapshotSource.of((state: EditorState) => state.field(remoteSnapshotField))),
   ];
 }
 
@@ -442,6 +445,14 @@ export class RemoteClient {
         ...(params !== undefined ? { params } : {}),
       });
     });
+  }
+
+  /** Force the universal recovery move by hand: fresh hello with the full
+   *  current text — the server rebuilds cold (I5). The product's staleness
+   *  affordance calls this; tests use it to repair engine-side
+   *  incremental-vs-cold divergence (OPEN-PROBLEMS #17). */
+  resync(): void {
+    if (this.dispatch) this.hello();
   }
 
   /** Producer command (ADR-002 §9 over the wire, e.g.

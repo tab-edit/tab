@@ -7,65 +7,42 @@
 // semantic layer, lint-with-fixes, and the chord highlighter ride on top.
 
 import { LanguageSupport } from "@codemirror/language";
-import { EditorState, type Extension } from "@codemirror/state";
-import { rectangularSelection } from "@codemirror/view";
-import { directiveAnnotations, kindStyling, selectionNodeHighlight, soundHighlight } from "./decorations.js";
-import { tabHighlighting } from "./highlight.js";
+import type { EditorState, Extension } from "@codemirror/state";
+import { tablatureSupport, type TablatureOptions } from "./client.js";
+import { midiEvents, midiFile, musicXml, importMusicXml } from "./export.js";
+import type { TabSemantics } from "./facade.js";
 import { tabLanguage } from "./language.js";
-import { tabLint } from "./lint.js";
+import { localSnapshotOf } from "./semantics.js";
+import { snapshotSource } from "./snapshot-model.js";
 
-export interface TablatureOptions {
-  /** Lint panel/gutter integration (default true). */
-  readonly lint?: boolean;
-  /** Chord highlight under the cursor (default true). */
-  readonly highlightSounds?: boolean;
-  /** Highlight the Sounds and Measures the current selection intersects —
-   *  including every range of a column selection (default true). */
-  readonly highlightSelection?: boolean;
-  /** Allow rectangular/multi-range selections (default true — column
-   *  selections are how tab editing works). */
-  readonly multipleSelections?: boolean;
-  /** Plain mouse-drag makes a column (rectangular) selection — no Alt
-   *  needed (default true). Verified live with Playwright: `eventFilter:
-   *  () => true` (matching literally what was asked) captures EVERY
-   *  mousedown, including a double-click's second one, before CM's own
-   *  dblclick word-select runs — a real regression. Gating on
-   *  `event.detail === 1` fixes it: single-click drags still start a
-   *  column selection (the feature), while double/triple clicks
-   *  (detail >= 2) fall through to native word/line select untouched.
-   *  Set false for CM's stock Alt-drag-only rectangular selection. */
-  readonly columnSelection?: boolean;
-  /** Dotted-underline + hover on recognized `Key: value` directives —
-   *  quiet feedback for what the system picked up (default on). */
-  readonly annotateDirectives?: boolean;
-  /** The adapter's own deliberate token colors (default on) — do not rely
-   *  on host fallback highlight styles. */
-  readonly tokenColors?: boolean;
-  /** An installed theme pack (compile one from a TabThemeSpec via
-   *  `tabTheme()`); replaces the default themes entirely. */
-  readonly theme?: Extension;
-  /** Kind-driven line styling: prose/comments recede like comments in a
-   *  code editor; music keeps the color budget (default on). */
-  readonly kindStyling?: boolean;
+export type { TablatureOptions } from "./client.js";
+
+/** The complete tablature editing system as one extension — the LOCAL
+ *  configuration: full engine in-process. The support extras are shared
+ *  verbatim with remoteTablature() (client.ts); the only local-mode
+ *  additions are the semantic language (wiring 2) and the local snapshot
+ *  source (default precedence — a remote store outranks it, see
+ *  snapshot-model.ts). */
+export function tablature(options: TablatureOptions = {}): Extension {
+  return new LanguageSupport(tabLanguage, [
+    snapshotSource.of(localSnapshotOf),
+    ...tablatureSupport(options),
+  ]);
 }
 
-/** The complete tablature editing system as one extension. */
-export function tablature(options: TablatureOptions = {}): Extension {
-  const extras: Extension[] = [];
-  if (options.lint !== false) extras.push(tabLint());
-  if (options.theme) extras.push(options.theme);
-  else if (options.tokenColors !== false) extras.push(tabHighlighting());
-  if (options.highlightSounds !== false) extras.push(soundHighlight());
-  if (options.annotateDirectives !== false) extras.push(directiveAnnotations());
-  if (options.kindStyling !== false) extras.push(kindStyling());
-  if (options.highlightSelection !== false) extras.push(selectionNodeHighlight());
-  if (options.multipleSelections !== false) {
-    extras.push(EditorState.allowMultipleSelections.of(true));
-  }
-  if (options.columnSelection !== false) {
-    extras.push(rectangularSelection({ eventFilter: (e) => e.detail === 1 }));
-  }
-  return new LanguageSupport(tabLanguage, extras);
+/** The local implementation of the facade — the open-source / offline
+ *  configuration. Its remote twin is createRemoteSemantics
+ *  (@tab-edit/cm/client); an app flips between them by swapping one
+ *  re-export line (facade.ts contract). */
+export function createLocalSemantics(options: TablatureOptions = {}): TabSemantics {
+  return {
+    extension: tablature(options),
+    musicXml: async (state: EditorState) => musicXml(state),
+    midiFile: async (state: EditorState) => midiFile(state),
+    midiEvents: async (state: EditorState) => midiEvents(state),
+    importMusicXml: async (state: EditorState, xml: string) =>
+      importMusicXml(state, xml).map((e) => ({ from: e.from, to: e.to, insert: e.insert })),
+  };
 }
 
 export { tabLanguage, tabTree } from "./language.js";
@@ -94,17 +71,33 @@ export {
 } from "./highlight.js";
 export type { TabThemeSpec } from "./highlight.js";
 export { midiOfSelection, selectedNodes } from "./selection.js";
-export { importMusicXml, midiFile, musicXml } from "./export.js";
+export { importMusicXml, midiEvents, midiFile, musicXml } from "./export.js";
 export {
-  directiveAnnotationRanges,
+  baseTabLanguage,
+  createRemoteSemantics,
+  remoteTablature,
+  tablatureSupport,
+} from "./client.js";
+export type { RemoteSemantics, RemoteSemanticsOptions } from "./client.js";
+export type {
+  MidiEvents,
+  PlaybackBend,
+  PlaybackEvent,
+  TabSemantics,
+  TextEditData,
+} from "./facade.js";
+export {
   directiveAnnotations,
   kindStyling,
-  recededLineStarts,
-  selectedNodeHighlightRanges,
   selectionNodeHighlight,
   soundHighlight,
-  soundRangesAtCursor,
 } from "./decorations.js";
+export {
+  directiveAnnotationRanges,
+  recededLineStarts,
+  selectedNodeHighlightRanges,
+  soundRangesAtCursor,
+} from "./semantics.js";
 export {
   computeSnapshot,
   localSnapshotOf,

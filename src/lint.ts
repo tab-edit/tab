@@ -5,7 +5,7 @@
 
 import { linter, type Diagnostic as CmDiagnostic } from "@codemirror/lint";
 import type { EditorState, Extension } from "@codemirror/state";
-import { snapshotOf } from "./semantics.js";
+import { snapshotOf } from "./snapshot-model.js";
 
 /** Pure mapping (headless-testable): SNAPSHOT diagnostics → CM shape
  *  (ADR-003 M-R0: the lint source renders snapshot data; the linter's own

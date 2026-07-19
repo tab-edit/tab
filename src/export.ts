@@ -3,7 +3,8 @@
 // live preview after a keystroke recomputes one section + the concat).
 
 import type { EditorState } from "@codemirror/state";
-import { documentMidi, documentXml, encodeSmf, tempo } from "@tab-edit/plugins";
+import { documentMidi, documentXml, encodeSmf, MIDI_PPQ, tempo } from "@tab-edit/plugins";
+import type { MidiEvents } from "./facade.js";
 import { tabTree } from "./language.js";
 import { readTabProp, runTabCommand } from "./state-layer.js";
 
@@ -14,17 +15,33 @@ export function musicXml(state: EditorState): string {
   return readTabProp(state, documentXml, tree.topNode);
 }
 
-/** Format-0 Standard MIDI File bytes (any player). */
-export function midiFile(state: EditorState): Uint8Array {
-  const tree = tabTree(state);
-  if (!tree) return new Uint8Array();
+function bpmOf(state: EditorState): number {
+  const tree = tabTree(state)!;
   const sections = tree.topNode.getChildren("Section");
   const firstMusic =
     sections.find((s) =>
       s.getChildren("Block").some((b) => b.getChildren("Measure").length > 0)
     ) ?? sections[0];
-  const bpm = firstMusic ? readTabProp(state, tempo, firstMusic).bpm : 120;
-  return encodeSmf(readTabProp(state, documentMidi, tree.topNode), { bpm });
+  return firstMusic ? readTabProp(state, tempo, firstMusic).bpm : 120;
+}
+
+/** Format-0 Standard MIDI File bytes (any player). */
+export function midiFile(state: EditorState): Uint8Array {
+  const tree = tabTree(state);
+  if (!tree) return new Uint8Array();
+  return encodeSmf(readTabProp(state, documentMidi, tree.topNode), { bpm: bpmOf(state) });
+}
+
+/** The playback timeline's inputs — the LOCAL twin of the remote
+ *  `midiEvents` query (the differential suites pin the two identical). */
+export function midiEvents(state: EditorState): MidiEvents {
+  const tree = tabTree(state);
+  if (!tree) return { bpm: 120, ppq: MIDI_PPQ, events: [] };
+  return {
+    bpm: bpmOf(state),
+    ppq: MIDI_PPQ,
+    events: readTabProp(state, documentMidi, tree.topNode),
+  };
 }
 
 /** Import a MusicXML document: returns the TextEdits appending its tab
