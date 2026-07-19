@@ -109,10 +109,65 @@ function sinkFor(audio: AudioContext, timbre: Timbre): AudioNode {
     body.gain.value = 3;
     body.Q.value = 0.9;
     top.connect(body).connect(limiter);
+    // BODY RESONANCE (Stan 2026-07-19: "doesn't really sound like a
+    // guitar"): the missing ingredient is the BOX — a real guitar's top
+    // plate + air cavity ring at modal frequencies and smear every note
+    // with a short wooden reverberation. A tiny generated impulse response
+    // (modal sines + fast-decaying air noise, ~120 ms) convolved in
+    // PARALLEL does what no EQ peak can: the dry string stays articulate,
+    // the wet path adds the box around it. Mix and mode table are
+    // ear-tunable constants.
+    const convolver = audio.createConvolver();
+    convolver.buffer = guitarBodyIR(audio);
+    const wet = audio.createGain();
+    wet.gain.value = 0.35; // body amount — the "how much box" knob
+    convolver.connect(wet).connect(limiter);
+    top.connect(convolver);
     sink = top;
   }
   sinkCache.set(timbre, sink);
   return sink;
+}
+
+/** Generated guitar-body impulse response: the dominant modes of a steel-
+ *  string flat-top (Helmholtz air ~100 Hz, top plate ~200 Hz, back/higher
+ *  plate modes ~400/650 Hz) as decaying sines, plus a few ms of filtered
+ *  noise for the woody attack reflections. Deterministic, cached — one
+ *  buffer per context lifetime. */
+let bodyIRCache: AudioBuffer | null = null;
+function guitarBodyIR(audio: AudioContext): AudioBuffer {
+  if (bodyIRCache) return bodyIRCache;
+  const rate = audio.sampleRate;
+  const length = Math.ceil(rate * 0.12);
+  const buffer = audio.createBuffer(1, length, rate);
+  const data = buffer.getChannelData(0);
+  // mode: [frequency Hz, relative level, decay seconds]
+  const MODES: readonly [number, number, number][] = [
+    [98, 1.0, 0.09], // Helmholtz air resonance — the "boom"
+    [196, 0.7, 0.07], // top-plate fundamental — the "wood"
+    [402, 0.35, 0.05],
+    [655, 0.2, 0.04],
+  ];
+  for (const [hz, level, decay] of MODES) {
+    const w = 2 * Math.PI * hz;
+    for (let i = 0; i < length; i++) {
+      const t = i / rate;
+      data[i] += level * Math.sin(w * t) * Math.exp(-t / decay);
+    }
+  }
+  // Early wooden reflections: 8 ms of lowpassed noise at the front.
+  let lp = 0;
+  const early = Math.ceil(rate * 0.008);
+  for (let i = 0; i < early; i++) {
+    lp = 0.85 * lp + 0.15 * (Math.random() * 2 - 1);
+    data[i] += 0.4 * lp * (1 - i / early);
+  }
+  // Normalize to keep the wet path's loudness independent of sample rate.
+  let peak = 0;
+  for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  if (peak > 0) for (let i = 0; i < length; i++) data[i] /= peak;
+  bodyIRCache = buffer;
+  return buffer;
 }
 
 // White noise is white noise: one cached buffer per decay length, not one
@@ -324,6 +379,20 @@ function pluck(
   out.gain.exponentialRampToValueAtTime(0.001, at + dur + 0.35);
   src.connect(out).connect(master);
   src.start(at);
+  // Pick-contact knock (realism pass 2026-07-19): the instant a finger or
+  // pick releases a string, the guitar TOP gets a percussive tap — a low
+  // "knock" every recording has and pure string synthesis lacks. 25 ms
+  // sine drop, quiet, gated by the same velocity level.
+  const knock = audio.createOscillator();
+  knock.type = "sine";
+  knock.frequency.setValueAtTime(110, at);
+  knock.frequency.exponentialRampToValueAtTime(78, at + 0.025);
+  const knockGain = audio.createGain();
+  knockGain.gain.setValueAtTime(0.1 * level, at);
+  knockGain.gain.exponentialRampToValueAtTime(0.001, at + 0.03);
+  knock.connect(knockGain).connect(master);
+  knock.start(at);
+  knock.stop(at + 0.04);
 }
 
 /** One GM percussion key's synthesis recipe — DATA, like the engine's
