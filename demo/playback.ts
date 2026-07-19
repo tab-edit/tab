@@ -316,8 +316,11 @@ const COWBELL_R: DrumRecipe = { tone: { startHz: 540, decaySec: 0.25, type: "squ
 const BLOCK_R: DrumRecipe = { tone: { startHz: 900, decaySec: 0.07, type: "sine", level: 0.6 } };
 
 /** The GM drum map, keyed by MIDI note (channel-10 semantics — the same
- *  keys the exports emit, so in-app playback and a DAW agree per part). */
-export const DRUM_RECIPES: ReadonlyMap<number, DrumRecipe> = new Map([
+ *  keys the exports emit, so in-app playback and a DAW agree per part).
+ *  This is the PLAYER-side extension point (engine packs are pure-value by
+ *  design — they decide what a glyph MEANS; a SOUND PACK registers here to
+ *  decide what a GM key sounds like, or to replace a builtin recipe). */
+const DRUM_RECIPE_REGISTRY: Map<number, DrumRecipe> = new Map([
   [35, KICK_R], [36, KICK_R],
   [37, SIDESTICK_R], [38, SNARE_R], [40, SNARE_R],
   [39, SIDESTICK_R],
@@ -332,8 +335,25 @@ export const DRUM_RECIPES: ReadonlyMap<number, DrumRecipe> = new Map([
 
 const DEFAULT_DRUM_R: DrumRecipe = { noise: { filter: "bandpass", hz: 900, decaySec: 0.12, level: 0.5, q: 1 } };
 
+/** Register (or replace) the synthesis recipe for a GM percussion key —
+ *  the sound-pack surface. Returns an undo handle so hosts can offer
+ *  toggleable sound packs (same idiom as CM compartments). */
+export function registerDrumSound(midi: number, recipe: DrumRecipe): () => void {
+  const previous = DRUM_RECIPE_REGISTRY.get(midi);
+  DRUM_RECIPE_REGISTRY.set(midi, recipe);
+  return () => {
+    if (previous) DRUM_RECIPE_REGISTRY.set(midi, previous);
+    else DRUM_RECIPE_REGISTRY.delete(midi);
+  };
+}
+
+/** Read-only view of the active drum map (Inspector/plugin-manager UIs). */
+export function drumSounds(): ReadonlyMap<number, DrumRecipe> {
+  return DRUM_RECIPE_REGISTRY;
+}
+
 function drumHit(audio: AudioContext, master: GainNode, at: number, midi: number, level: number): void {
-  const recipe = DRUM_RECIPES.get(midi) ?? DEFAULT_DRUM_R;
+  const recipe = DRUM_RECIPE_REGISTRY.get(midi) ?? DEFAULT_DRUM_R;
   if (recipe.tone) {
     const t = recipe.tone;
     const osc = audio.createOscillator();
