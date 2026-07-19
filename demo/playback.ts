@@ -75,6 +75,61 @@ declare global {
 
 let ctx: AudioContext | null = null;
 
+// Output chains are CACHED per timbre on the (equally cached) context —
+// the 2026-07-18 leak diagnosis made real: building a fresh
+// DynamicsCompressor per play and never disconnecting it stacked a live
+// compressor chain onto `destination` for every play of the session, and
+// the render-thread cost of the pile eventually broke ALL audio. One
+// limiter (+ one plucked shaping chain) per context, ever, by construction.
+const sinkCache = new Map<Timbre, AudioNode>();
+function sinkFor(audio: AudioContext, timbre: Timbre): AudioNode {
+  const hit = sinkCache.get(timbre);
+  if (hit) return hit;
+  // Safety limiter: NOTHING reaches the ears unclamped (polyphony sums and
+  // any future synth bug hit this before the destination).
+  const limiter = audio.createDynamicsCompressor();
+  limiter.threshold.value = -12;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.15;
+  limiter.connect(audio.destination);
+  // Plucked tone shaping (a dry Karplus-Strong string sounds like plastic):
+  // a gentle top-end rolloff tames the remaining fizz and a low-mid peak
+  // stands in for the guitar body's air resonance.
+  let sink: AudioNode = limiter;
+  if (timbre === "plucked") {
+    const top = audio.createBiquadFilter();
+    top.type = "lowpass";
+    top.frequency.value = 4200;
+    top.Q.value = 0.4;
+    const body = audio.createBiquadFilter();
+    body.type = "peaking";
+    body.frequency.value = 170;
+    body.gain.value = 3;
+    body.Q.value = 0.9;
+    top.connect(body).connect(limiter);
+    sink = top;
+  }
+  sinkCache.set(timbre, sink);
+  return sink;
+}
+
+// White noise is white noise: one cached buffer per decay length, not one
+// fresh multi-hundred-KB allocation PER DRUM HIT (a full-song drum score
+// allocated hundreds of MB of throwaway buffers).
+const noiseCache = new Map<number, AudioBuffer>();
+function noiseBuffer(audio: AudioContext, decaySec: number): AudioBuffer {
+  const length = Math.ceil(audio.sampleRate * decaySec);
+  const hit = noiseCache.get(length);
+  if (hit) return hit;
+  const buffer = audio.createBuffer(1, length, audio.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  noiseCache.set(length, buffer);
+  return buffer;
+}
+
 function bpmOf(state: EditorState): number {
   const tree = tabTree(state);
   if (!tree) return 120;
@@ -371,11 +426,8 @@ function drumHit(audio: AudioContext, master: GainNode, at: number, midi: number
   }
   if (recipe.noise) {
     const n = recipe.noise;
-    const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * n.decaySec), audio.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     const src = audio.createBufferSource();
-    src.buffer = buffer;
+    src.buffer = noiseBuffer(audio, n.decaySec);
     const filter = audio.createBiquadFilter();
     filter.type = n.filter;
     filter.frequency.value = n.hz;
@@ -388,16 +440,53 @@ function drumHit(audio: AudioContext, master: GainNode, at: number, midi: number
   }
 }
 
-function scheduleFrom(
+// —— Windowed scheduling (2026-07-19 audio-breakup fix). Scheduling a whole
+// piece up front puts EVERY note's node chain in the render graph at once —
+// fine for an 8-bar riff, fatal for the pulled full-song scores (Painkiller
+// = 1,829 events ≈ 7,000+ live nodes: the render thread starves and ALL
+// audio crackles, whatever the instrument). The player now pumps a short
+// lookahead window on a timer; live nodes scale with polyphony, never piece
+// length. The two cursor functions are the pure, headless-tested core.
+
+/** First index ≥ cursor whose event starts AFTER the horizon (events sorted
+ *  by atSec): everything in [cursor, result) is due for scheduling. */
+export function schedulableThrough(
+  events: readonly { atSec: number }[],
+  cursor: number,
+  horizonSec: number
+): number {
+  let i = cursor;
+  while (i < events.length && events[i].atSec <= horizonSec) i++;
+  return i;
+}
+
+/** Seek cursor: the first event still SOUNDING at (or starting after) the
+ *  offset — long notes already ringing at a seek point must replay. */
+export function cursorAt(
+  events: readonly { atSec: number; durSec: number }[],
+  offsetSec: number
+): number {
+  let i = 0;
+  while (i < events.length && events[i].atSec + events[i].durSec <= offsetSec) i++;
+  return i;
+}
+
+/** How far ahead of the playhead the pump schedules, and how often it runs.
+ *  1.2s/250ms is the standard Web Audio lookahead pattern: deep enough that
+ *  a busy main thread never gaps the audio, shallow enough that a full song
+ *  keeps only a handful of node chains alive. */
+const LOOKAHEAD_SEC = 1.2;
+const PUMP_MS = 250;
+
+function scheduleOne(
   audio: AudioContext,
   master: GainNode,
-  events: readonly TimedEvent[],
+  e: TimedEvent,
   offsetSec: number,
   t0: number,
   timbre: Timbre
 ): void {
-  for (const e of events) {
-    if (e.atSec + e.durSec <= offsetSec) continue;
+  {
     const at = t0 + Math.max(0, e.atSec - offsetSec);
     const dur = e.durSec;
     // Velocity → gain, normalized so the pack default (0x60) keeps the
@@ -447,33 +536,7 @@ export function createPlayer(
   ctx ??= new AudioContext();
   const audio = ctx;
   void audio.resume();
-  // Safety limiter: NOTHING reaches the ears unclamped (polyphony sums and
-  // any future synth bug hit this before the destination).
-  const limiter = audio.createDynamicsCompressor();
-  limiter.threshold.value = -12;
-  limiter.knee.value = 6;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.002;
-  limiter.release.value = 0.15;
-  limiter.connect(audio.destination);
-  // Plucked tone shaping (a dry Karplus-Strong string sounds like plastic):
-  // a gentle top-end rolloff tames the remaining fizz and a low-mid peak
-  // stands in for the guitar body's air resonance. `sink` is what every
-  // master gain connects to — rebuild() must route through the same chain.
-  let sink: AudioNode = limiter;
-  if (timbre === "plucked") {
-    const top = audio.createBiquadFilter();
-    top.type = "lowpass";
-    top.frequency.value = 4200;
-    top.Q.value = 0.4;
-    const body = audio.createBiquadFilter();
-    body.type = "peaking";
-    body.frequency.value = 170;
-    body.gain.value = 3;
-    body.Q.value = 0.9;
-    top.connect(body).connect(limiter);
-    sink = top;
-  }
+  const sink = sinkFor(audio, timbre);
   let master = audio.createGain();
   master.gain.value = 0.45;
   master.connect(sink);
@@ -481,20 +544,49 @@ export function createPlayer(
   let startedAt = audio.currentTime + 0.05; // ctx-time of playback origin
   let offset = 0; // seconds into the piece at `startedAt`
   let paused = false;
-  scheduleFrom(audio, master, events, 0, startedAt, timbre);
+
+  // The pump: schedule only what starts inside the lookahead window, on a
+  // steady timer. Cursor state lives here; the math is the pure functions
+  // above. A (re)build resets the cursor via cursorAt so long notes still
+  // sounding at a seek point replay from their attack (same audible
+  // behavior the bulk scheduler had).
+  let cursor = cursorAt(events, 0);
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const pump = (): void => {
+    const horizon = offset + (audio.currentTime - startedAt) + LOOKAHEAD_SEC;
+    const through = schedulableThrough(events, cursor, horizon);
+    for (; cursor < through; cursor++) {
+      scheduleOne(audio, master, events[cursor], offset, startedAt, timbre);
+    }
+    if (cursor >= events.length && timer !== null) {
+      clearInterval(timer); // piece fully scheduled; nodes drain on their own
+      timer = null;
+    }
+  };
+  const startPump = (): void => {
+    pump();
+    if (cursor < events.length) timer = setInterval(pump, PUMP_MS);
+  };
+  const stopPump = (): void => {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+  };
+  startPump();
   globalThis.__lastPlayback = { events: events.length, totalSec, timbre };
 
   const now = (): number =>
     paused ? offset : Math.max(0, Math.min(totalSec, offset + (audio.currentTime - startedAt)));
 
   const rebuild = (fromSec: number): void => {
-    master.disconnect();
+    stopPump();
+    master.disconnect(); // silences already-scheduled nodes; they self-end
     master = audio.createGain();
     master.gain.value = 0.45;
     master.connect(sink);
     startedAt = audio.currentTime + 0.02;
     offset = fromSec;
-    scheduleFrom(audio, master, events, fromSec, startedAt, timbre);
+    cursor = cursorAt(events, fromSec);
+    startPump();
   };
 
   return {
@@ -508,6 +600,7 @@ export function createPlayer(
       if (paused) return;
       offset = now();
       paused = true;
+      stopPump();
       master.disconnect(); // hard-mute; resume reschedules from the offset
     },
     resume() {
@@ -555,6 +648,7 @@ export function createPlayer(
       };
     },
     stop() {
+      stopPump();
       master.disconnect();
     },
   };
