@@ -8,11 +8,12 @@ import redBarchetta from "./samples/red-barchetta-guitar.txt?raw";
 import backbeatBass from "./samples/backbeat-bass.txt?raw";
 import yyzBass from "./samples/yyz-bass.txt?raw";
 import tomSawyer from "./samples/tom-sawyer-drums.txt?raw";
-import airTonight from "./samples/in-the-air-tonight.txt?raw";
-import leveeBreaks from "./samples/when-the-levee-breaks.txt?raw";
-import rosanna from "./samples/rosanna-shuffle.txt?raw";
-import funkyDrummer from "./samples/funky-drummer.txt?raw";
-import wipeOut from "./samples/wipe-out.txt?raw";
+import leveeFull from "./samples/when-the-levee-breaks-full.txt?raw";
+import mobyDick from "./samples/moby-dick-solo.txt?raw";
+import painkiller from "./samples/painkiller.txt?raw";
+import airTonightFull from "./samples/in-the-air-tonight-full.txt?raw";
+import teenSpirit from "./samples/smells-like-teen-spirit.txt?raw";
+import hotForTeacher from "./samples/hot-for-teacher.txt?raw";
 import amenBreak from "./samples/amen-break.txt?raw";
 import hotrs from "./samples/house-of-the-rising-sun.txt?raw";
 import canon from "./samples/pachelbel-canon-in-d.txt?raw";
@@ -40,17 +41,19 @@ export const SAMPLES: readonly SampleGroup[] = [
     ],
   },
   {
-    // Recognizable, groove-forward showcases (Stan 2026-07-19) — authored
-    // pattern transcriptions "after" the famous recordings, with Tempo
-    // directives so playback sits at the right feel. Tom Sawyer stays as
-    // the wild-transcription stress piece (RTP dialect, full song).
+    // REAL full-length scores pulled VERBATIM from the wild (Stan
+    // 2026-07-19: long, recognizable, unmodified) — provenance: gotabs +
+    // ultimate-guitar via archive.org snapshots; tabber credits preserved
+    // in the files. Amen Break stays as the one short authored groove
+    // (THE breakbeat); Tom Sawyer remains the RTP stress piece.
     group: "Drums",
     items: [
-      { label: "In the Air Tonight (the fill)", text: airTonight },
-      { label: "When the Levee Breaks (Bonham)", text: leveeBreaks },
-      { label: "Rosanna (Porcaro shuffle)", text: rosanna },
-      { label: "Funky Drummer (Stubblefield)", text: funkyDrummer },
-      { label: "Wipe Out (the roll)", text: wipeOut },
+      { label: "When the Levee Breaks (Bonham, full)", text: leveeFull },
+      { label: "Moby Dick (Bonham live solo)", text: mobyDick },
+      { label: "Painkiller (Judas Priest, full)", text: painkiller },
+      { label: "In the Air Tonight (Collins, full)", text: airTonightFull },
+      { label: "Smells Like Teen Spirit (Grohl)", text: teenSpirit },
+      { label: "Hot for Teacher (Van Halen intro)", text: hotForTeacher },
       { label: "Amen Break (The Winstons)", text: amenBreak },
       { label: "Tom Sawyer (Rush, wild transcription)", text: tomSawyer },
     ],

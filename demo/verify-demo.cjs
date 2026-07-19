@@ -366,7 +366,7 @@ async function startServer() {
     check(groups.length >= 4, `picker has instrument optgroups (${groups.join(", ")})`);
     const startDoc = await page.evaluate(() => view.state.doc.line(1).text);
     check(/House Of The Rising Sun/i.test(startDoc), `starter doc stays the default (line 1: ${JSON.stringify(startDoc)})`);
-    await page.selectOption("#sample-picker", "2:6"); // Drums / Tom Sawyer (wild), after the six showcase grooves
+    await page.selectOption("#sample-picker", "2:7"); // Drums / Tom Sawyer (wild), last in the group
     const swapped = await page.evaluate(() => view.state.doc.toString());
     check(/Tom Sawyer/.test(swapped), "picking a drums sample swaps the doc");
     // A live transport message may still be holding the line — wait for
