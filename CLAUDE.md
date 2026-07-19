@@ -10,9 +10,14 @@ WeakMap, TabFragments reconstruct from CM's TreeFragments via `TabFragment.pairA
 
 ```bash
 npm run type-check && npm test   # the gate — run before EVERY commit
+                                 # (includes the /client BUNDLE AUDIT)
 npm run verify:remote            # LOCAL E2E of ADR-003: real browser → ws →
                                  # remote/host Session (spawns the sibling
                                  # dev server; demo ?remote=ws://… by hand)
+npm run verify:app               # PRODUCT app driver: artifact audit on the
+                                 # real vite build (engine-free — CI-fatal
+                                 # posture) + live wire checks
+npm run app                      # the product page (vercel builds THIS now)
 npm install                      # refresh COPIED @tab-edit/{ast,plugins,parse}
                                  # (rebuild ast AND plugins first: npm run build in each!)
                                  # @tab-edit/protocol comes from the remote
@@ -44,6 +49,23 @@ src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
                     counts — the perf-diagnosis surface; call AFTER reads),
                     inspectNode (per-node prop values + explain chain +
                     chain trace + computed-vs-cached + install warnings)
+src/client.ts       THE ENGINE-FREE ENTRY (@tab-edit/cm/client — exports
+                    map): baseTabLanguage (compiled LR tables only),
+                    remoteTablature() ≡ tablature() via shared
+                    tablatureSupport(), createRemoteSemantics(). NOTHING
+                    here may reach @tab-edit/{ast,plugins} — pinned by
+                    tests/client-bundle.test.ts (esbuild) AND
+                    app/verify-app.cjs (real vite artifact). Careful even
+                    with COMMENTS: audit markers match comment text.
+src/facade.ts       TabSemantics — the ONE app-facing interface; local
+                    twin createLocalSemantics lives in index.ts. The
+                    open-source flip = app/semantics-mode.ts re-export.
+src/snapshot-model.ts  PURE half of semantics: value model + 0ms
+                    resolvers + snapshotSource facet. Source selection is
+                    PRECEDENCE-based: tablature() installs the local
+                    engine at default prec, remoteSemantics() the wire
+                    store at Prec.highest — flatten ORDER is not a
+                    contract (found-by-storm).
 src/remote.ts       ADR-003 M-R1: RemoteClient (view-free core — start/
                     applyTransaction/flush/query/receive — + EditorView
                     glue via .extension), mapSnapshot (§5.1 R2/R5/R6 range
@@ -78,4 +100,13 @@ src/index.ts        tablature() — the whole system as one extension;
                     (default = local engine; RemoteClient overrides it —
                     every decoration/lint surface swaps origin at once)
 tests/adapter.test.ts  E2E on real CM machinery
+app/                THE PRODUCT PAGE (editor + wire semantics + OSMD sheet
+                    + import/export + samples): codes ONLY against the
+                    TabSemantics facade; semantics-mode.ts is the one-line
+                    local↔remote swap (both modes proven live 2026-07-18).
+                    Endpoint: ?remote= → VITE_REMOTE_URL → localhost
+                    dev-server; worker endpoints mint anonymous tokens.
+demo/               the DEV vehicle (engine panes, inspector, playback) —
+                    still fat by design; ?remote= + settings toggle for
+                    wire-vs-local comparison
 ```
