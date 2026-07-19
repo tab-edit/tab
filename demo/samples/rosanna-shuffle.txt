@@ -1,0 +1,12 @@
+Rosanna (after Jeff Porcaro, Toto 1982)
+The half-time shuffle: swung hats, ghost notes, one huge backbeat.
+Triplet grid - every beat is three columns.
+Tempo: 85
+
+HH|x-xx-xx-xx-x|x-xx-xx-xx-x|
+SD|-g--g-X--g--|-g--g-X--g--|
+BD|o-----------|o----o------|
+
+HH|x-xx-xx-xx-x|x-xx-xx-xo-x|
+SD|-g--g-X--g--|-g--g-X--g--|
+BD|o-----------|o----o--o---|

@@ -271,6 +271,103 @@ function pluck(
   src.start(at);
 }
 
+/** One GM percussion key's synthesis recipe — DATA, like the engine's
+ *  voice maps: the table is the in-app "soundfont", overridable per key
+ *  without touching the renderer. `tone` = pitched body (kick thump, tom
+ *  pitch, cowbell ring); `noise` = filtered burst (snare rattle, hats,
+ *  cymbal wash); either may be absent. */
+export interface DrumRecipe {
+  readonly tone?: {
+    readonly startHz: number;
+    /** Pitch glide target (the kick/tom drop); defaults to startHz. */
+    readonly endHz?: number;
+    readonly decaySec: number;
+    readonly type?: OscillatorType;
+    readonly level?: number;
+  };
+  readonly noise?: {
+    readonly filter: "highpass" | "bandpass";
+    readonly hz: number;
+    readonly decaySec: number;
+    readonly level?: number;
+    readonly q?: number;
+  };
+}
+
+const KICK_R: DrumRecipe = { tone: { startHz: 120, endHz: 48, decaySec: 0.22, type: "sine", level: 1.0 } };
+const SNARE_R: DrumRecipe = {
+  tone: { startHz: 185, endHz: 150, decaySec: 0.08, type: "triangle", level: 0.4 },
+  noise: { filter: "highpass", hz: 1600, decaySec: 0.16, level: 0.55 },
+};
+const SIDESTICK_R: DrumRecipe = { noise: { filter: "bandpass", hz: 2400, decaySec: 0.04, level: 0.5, q: 4 } };
+const HAT_CLOSED_R: DrumRecipe = { noise: { filter: "highpass", hz: 7000, decaySec: 0.05, level: 0.35 } };
+const HAT_OPEN_R: DrumRecipe = { noise: { filter: "highpass", hz: 6500, decaySec: 0.4, level: 0.35 } };
+const HAT_PEDAL_R: DrumRecipe = { noise: { filter: "highpass", hz: 6000, decaySec: 0.07, level: 0.28 } };
+const CRASH_R: DrumRecipe = { noise: { filter: "highpass", hz: 4500, decaySec: 1.3, level: 0.5 } };
+const RIDE_R: DrumRecipe = { noise: { filter: "highpass", hz: 8000, decaySec: 0.7, level: 0.3 } };
+const RIDE_BELL_R: DrumRecipe = {
+  tone: { startHz: 1050, decaySec: 0.5, type: "square", level: 0.2 },
+  noise: { filter: "highpass", hz: 8000, decaySec: 0.3, level: 0.15 },
+};
+const tomR = (hz: number): DrumRecipe => ({
+  tone: { startHz: hz * 1.35, endHz: hz, decaySec: 0.3, type: "sine", level: 0.85 },
+});
+const COWBELL_R: DrumRecipe = { tone: { startHz: 540, decaySec: 0.25, type: "square", level: 0.35 } };
+const BLOCK_R: DrumRecipe = { tone: { startHz: 900, decaySec: 0.07, type: "sine", level: 0.6 } };
+
+/** The GM drum map, keyed by MIDI note (channel-10 semantics — the same
+ *  keys the exports emit, so in-app playback and a DAW agree per part). */
+export const DRUM_RECIPES: ReadonlyMap<number, DrumRecipe> = new Map([
+  [35, KICK_R], [36, KICK_R],
+  [37, SIDESTICK_R], [38, SNARE_R], [40, SNARE_R],
+  [39, SIDESTICK_R],
+  [42, HAT_CLOSED_R], [44, HAT_PEDAL_R], [46, HAT_OPEN_R],
+  [41, tomR(85)], [43, tomR(100)], [45, tomR(120)], [47, tomR(140)], [48, tomR(165)], [50, tomR(195)],
+  [49, CRASH_R], [55, CRASH_R], [52, CRASH_R], [57, CRASH_R],
+  [51, RIDE_R], [59, RIDE_R], [53, RIDE_BELL_R],
+  [56, COWBELL_R],
+  [65, tomR(300)], [66, tomR(240)],
+  [76, BLOCK_R], [77, { tone: { startHz: 620, decaySec: 0.07, type: "sine", level: 0.6 } }],
+]);
+
+const DEFAULT_DRUM_R: DrumRecipe = { noise: { filter: "bandpass", hz: 900, decaySec: 0.12, level: 0.5, q: 1 } };
+
+function drumHit(audio: AudioContext, master: GainNode, at: number, midi: number, level: number): void {
+  const recipe = DRUM_RECIPES.get(midi) ?? DEFAULT_DRUM_R;
+  if (recipe.tone) {
+    const t = recipe.tone;
+    const osc = audio.createOscillator();
+    osc.type = t.type ?? "sine";
+    osc.frequency.setValueAtTime(t.startHz, at);
+    if (t.endHz !== undefined && t.endHz !== t.startHz) {
+      osc.frequency.exponentialRampToValueAtTime(t.endHz, at + t.decaySec * 0.6);
+    }
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime((t.level ?? 0.8) * level, at);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + t.decaySec);
+    osc.connect(gain).connect(master);
+    osc.start(at);
+    osc.stop(at + t.decaySec + 0.05);
+  }
+  if (recipe.noise) {
+    const n = recipe.noise;
+    const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * n.decaySec), audio.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = audio.createBufferSource();
+    src.buffer = buffer;
+    const filter = audio.createBiquadFilter();
+    filter.type = n.filter;
+    filter.frequency.value = n.hz;
+    filter.Q.value = n.q ?? 0.8;
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime((n.level ?? 0.5) * level, at);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + n.decaySec);
+    src.connect(filter).connect(gain).connect(master);
+    src.start(at);
+  }
+}
+
 function scheduleFrom(
   audio: AudioContext,
   master: GainNode,
@@ -296,21 +393,7 @@ function scheduleFrom(
       semitones: b.semitones,
     }));
     if (e.percussion) {
-      const len = Math.min(0.12, dur);
-      const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * len), audio.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-      const src = audio.createBufferSource();
-      src.buffer = buffer;
-      const band = audio.createBiquadFilter();
-      band.type = "bandpass";
-      band.frequency.value = 150 + (e.midi % 24) * 180;
-      band.Q.value = 0.8;
-      const gain = audio.createGain();
-      gain.gain.setValueAtTime(0.6 * level, at);
-      gain.gain.exponentialRampToValueAtTime(0.001, at + len);
-      src.connect(band).connect(gain).connect(master);
-      src.start(at);
+      drumHit(audio, master, at, e.midi, level);
     } else if (timbre === "plucked") {
       pluck(audio, master, at, 440 * 2 ** ((e.midi - 69) / 12), dur, level, bendPts);
     } else {

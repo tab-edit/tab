@@ -1,0 +1,11 @@
+Funky Drummer (after Clyde Stubblefield, James Brown 1970)
+The most-sampled drum break of all time.
+Tempo: 100
+
+HH|xxxxxxxxxxoxxxxx|xxxxxxxxxxoxxxxx|
+SD|----o--g-go-o--g|----o--g-go-o--g|
+BD|o-o-----------o-|o-o------o------|
+
+HH|xxxxxxxxxxoxxxxx|xxxxxxxxxxoxxxxx|
+SD|----o--g-go-o--g|----o--g-g--o--o|
+BD|o-o-----------o-|o-o------o--o---|

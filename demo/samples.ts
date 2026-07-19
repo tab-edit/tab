@@ -7,8 +7,13 @@ import satie from "./samples/satie-gnossienne.txt?raw";
 import redBarchetta from "./samples/red-barchetta-guitar.txt?raw";
 import backbeatBass from "./samples/backbeat-bass.txt?raw";
 import yyzBass from "./samples/yyz-bass.txt?raw";
-import backbeatDrums from "./samples/backbeat-drums.txt?raw";
 import tomSawyer from "./samples/tom-sawyer-drums.txt?raw";
+import airTonight from "./samples/in-the-air-tonight.txt?raw";
+import leveeBreaks from "./samples/when-the-levee-breaks.txt?raw";
+import rosanna from "./samples/rosanna-shuffle.txt?raw";
+import funkyDrummer from "./samples/funky-drummer.txt?raw";
+import wipeOut from "./samples/wipe-out.txt?raw";
+import amenBreak from "./samples/amen-break.txt?raw";
 import hotrs from "./samples/house-of-the-rising-sun.txt?raw";
 import canon from "./samples/pachelbel-canon-in-d.txt?raw";
 
@@ -35,10 +40,19 @@ export const SAMPLES: readonly SampleGroup[] = [
     ],
   },
   {
+    // Recognizable, groove-forward showcases (Stan 2026-07-19) — authored
+    // pattern transcriptions "after" the famous recordings, with Tempo
+    // directives so playback sits at the right feel. Tom Sawyer stays as
+    // the wild-transcription stress piece (RTP dialect, full song).
     group: "Drums",
     items: [
-      { label: "Backbeat Study", text: backbeatDrums },
-      { label: "Tom Sawyer (Rush)", text: tomSawyer },
+      { label: "In the Air Tonight (the fill)", text: airTonight },
+      { label: "When the Levee Breaks (Bonham)", text: leveeBreaks },
+      { label: "Rosanna (Porcaro shuffle)", text: rosanna },
+      { label: "Funky Drummer (Stubblefield)", text: funkyDrummer },
+      { label: "Wipe Out (the roll)", text: wipeOut },
+      { label: "Amen Break (The Winstons)", text: amenBreak },
+      { label: "Tom Sawyer (Rush, wild transcription)", text: tomSawyer },
     ],
   },
   {
