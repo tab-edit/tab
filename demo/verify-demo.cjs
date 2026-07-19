@@ -444,8 +444,13 @@ async function startServer() {
 
     // ——— inspector: uniform truncation + expand + copy ———
     await page.evaluate(() => {
+      // Active sample here is Drums/Tom Sawyer: target the first hit glyph
+      // after the first barline — a REAL measure position. (The old
+      // `"0" after "e|"` probe landed in prose, which only worked while
+      // prose glued into phantom measures — cured by the membership law,
+      // 2026-07-19.)
       const doc = view.state.doc.toString();
-      const idx = doc.indexOf("0", doc.indexOf("e|"));
+      const idx = doc.indexOf("X", doc.indexOf("|"));
       view.dispatch({ selection: { anchor: idx + 1, head: idx + 1 } });
     });
     await page.waitForTimeout(700);
@@ -560,8 +565,10 @@ async function startServer() {
     await page.evaluate(() => {
       const doc = window.view.state.doc.toString();
       // First fret digit is the "0" in the first tab line ("e|--0--..." —
-      // doc.indexOf("0") alone would hit "Tempo: 100" in the header).
-      const idx = doc.indexOf("0", doc.indexOf("e|"));
+      // Active sample is Drums/Tom Sawyer — probe the first hit glyph
+      // after the first barline (a REAL measure position; prose positions
+      // stopped carrying phantom measures with the membership law).
+      const idx = doc.indexOf("X", doc.indexOf("|"));
       window.view.dispatch({ selection: { anchor: idx + 1, head: idx + 1 } });
       window.view.focus();
     });
@@ -643,8 +650,9 @@ async function startServer() {
 
     // ——— 8. selection still lights Sound/Measure node highlights ———
     await page.evaluate(() => {
+      // Same membership-law fix as steps 7/9: select across real drum hits.
       const doc = window.view.state.doc.toString();
-      const idx = doc.indexOf("0", doc.indexOf("e|"));
+      const idx = doc.indexOf("X", doc.indexOf("|"));
       window.view.dispatch({ selection: { anchor: idx, head: idx + 4 } });
     });
     await page.waitForFunction(
