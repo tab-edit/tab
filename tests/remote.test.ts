@@ -14,16 +14,20 @@ import {
   PROTOCOL_VERSION,
   type ServerMessage,
 } from "@tab-edit/protocol";
+import { documentMidi, MIDI_PPQ, tempo } from "@tab-edit/plugins";
 import {
   chaosTransport,
   localSnapshotOf,
   mapSnapshot,
+  readTabProp,
   RemoteClient,
   remoteSemantics,
+  runTabCommand,
   sessionTransport,
   snapshotOf,
   tabDiagnostics,
   tablature,
+  tabTree,
   musicXml,
   type RemoteTransport,
   type SemanticSnapshot,
@@ -140,7 +144,42 @@ class OracleSession {
         if (msg.kind === "musicXml") {
           return [{ type: "queryResult", id: msg.id, result: musicXml(this.state) }];
         }
+        if (msg.kind === "midiEvents") {
+          const tree = tabTree(this.state)!;
+          const firstMusic =
+            tree.topNode
+              .getChildren("Section")
+              .find((s) => s.getChildren("Block").some((b) => b.getChildren("Measure").length > 0)) ??
+            tree.topNode.getChildren("Section")[0];
+          return [
+            {
+              type: "queryResult",
+              id: msg.id,
+              result: {
+                bpm: firstMusic ? readTabProp(this.state, tempo, firstMusic).bpm : 120,
+                ppq: MIDI_PPQ,
+                events: readTabProp(this.state, documentMidi, tree.topNode),
+              },
+            },
+          ];
+        }
         return [{ type: "queryError", id: msg.id, message: `unknown kind "${msg.kind}"` }];
+      }
+      case "command": {
+        if (!this.state) return [{ type: "commandError", id: msg.id, message: "no document" }];
+        try {
+          const edits = runTabCommand(this.state, msg.kind, msg.args);
+          return [
+            {
+              type: "commandResult",
+              id: msg.id,
+              edits: edits.map((e) => ({ from: e.from, to: e.to, insert: e.insert })),
+              atVersion: this.version,
+            },
+          ];
+        } catch (e) {
+          return [{ type: "commandError", id: msg.id, message: (e as Error).message }];
+        }
       }
     }
   };
@@ -359,4 +398,90 @@ test("queries resolve over the wire (R3: never stale)", async () => {
   const xml = (await ed.client.query("musicXml")) as string;
   expect(xml).toContain("<score-partwise");
   await expect(ed.client.query("nope")).rejects.toThrow('unknown kind "nope"');
+});
+
+test("commands cross the wire: import round trip stays convergent", async () => {
+  const oracle = new OracleSession();
+  const ed = remoteEditor(DOC, sessionTransport(oracle.handle));
+  const xml = (await ed.client.query("musicXml")) as string;
+  const edits = await ed.client.command("musicxml-import.import", { xml });
+  expect(edits.length).toBeGreaterThan(0);
+  const tr = ed.state.update({ changes: edits.map((e) => ({ ...e })) });
+  ed.state = tr.state;
+  ed.client.applyTransaction(tr);
+  expect(ed.client.staleBy).toBe(0);
+  expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
+});
+
+test("R1: command results rebase through edits typed while in flight", async () => {
+  const oracle = new OracleSession();
+  const chaos = chaosTransport(oracle.handle, { rand: mulberry32(3) });
+  const ed = remoteEditor(DOC, chaos);
+  chaos.drain(); // boot
+  const xml = (await (async () => {
+    const p = ed.client.query("musicXml");
+    chaos.drain();
+    return p;
+  })()) as string;
+  // The import appends at the END of the doc — a knowable coordinate.
+  const endBefore = ed.state.doc.length;
+  const pending = ed.client.command("musicxml-import.import", { xml });
+  // Type at position 0 BEFORE the result comes back: every appended edit's
+  // coordinate must shift by the insertion.
+  ed.edit({ from: 0, insert: "~" });
+  chaos.drain();
+  const edits = await pending;
+  expect(Math.min(...edits.map((e) => e.from))).toBe(endBefore + 1);
+  const tr = ed.state.update({ changes: edits.map((e) => ({ ...e })) });
+  ed.state = tr.state;
+  ed.client.applyTransaction(tr);
+  chaos.drain();
+  expect(ed.client.staleBy).toBe(0);
+  expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
+});
+
+test("midiEvents query: playback inputs match the local engine exactly", async () => {
+  const oracle = new OracleSession();
+  const ed = remoteEditor(DOC, sessionTransport(oracle.handle));
+  const wire = (await ed.client.query("midiEvents")) as {
+    bpm: number;
+    ppq: number;
+    events: unknown[];
+  };
+  expect(wire.bpm).toBe(120);
+  expect(wire.ppq).toBe(MIDI_PPQ);
+  expect(wire.events.length).toBeGreaterThan(0);
+  const local = localState(DOC);
+  const tree = tabTree(local)!;
+  expect(wire.events).toEqual(
+    JSON.parse(JSON.stringify(readTabProp(local, documentMidi, tree.topNode)))
+  );
+});
+
+test("reconnect: a transport reset re-hellos and recovers edits lost while down", () => {
+  const oracle = new OracleSession();
+  const inner = sessionTransport(oracle.handle);
+  let down = false;
+  let hellos = 0;
+  let fireReset: () => void = () => {};
+  const flaky: RemoteTransport = {
+    send: (msg) => {
+      if (msg.type === "hello") hellos++;
+      if (!down) inner.send(msg);
+    },
+    onMessage: (h) => inner.onMessage(h),
+    onReset: (h) => {
+      fireReset = h;
+    },
+  };
+  const ed = remoteEditor(DOC, flaky);
+  expect(ed.client.status).toBe("live");
+  down = true; // socket dies silently
+  ed.edit({ from: 3, insert: "9" }); // lost on the wire
+  down = false;
+  fireReset(); // socket re-established → client re-hellos with full text
+  expect(hellos).toBe(2);
+  expect(ed.client.status).toBe("live");
+  expect(ed.client.staleBy).toBe(0);
+  expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
 });

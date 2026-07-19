@@ -30,6 +30,7 @@ import {
   type ClientMessage,
   type ServerMessage,
   type SnapshotPayload,
+  type TextEditJSON,
 } from "@tab-edit/protocol";
 import { snapshotSource, type SemanticSnapshot } from "./semantics.js";
 
@@ -132,6 +133,10 @@ export function remoteSemantics(): Extension {
 export interface RemoteTransport {
   send(msg: ClientMessage): void;
   onMessage(handler: (msg: ServerMessage) => void): void;
+  /** Optional: fired when the underlying channel was torn down and
+   *  re-established (messages may have been lost in between). The client
+   *  answers with a fresh hello — the universal recovery move. */
+  onReset?(handler: () => void): void;
 }
 
 /** In-process loopback: wire the client straight at anything protocol-
@@ -225,29 +230,73 @@ export function chaosTransport(
   };
 }
 
+export interface WebSocketTransportOptions {
+  /** Auto-reconnect with exponential backoff on close (default true).
+   *  Every re-established socket fires onReset → the client re-hellos. */
+  readonly reconnect?: boolean;
+  readonly maxBackoffMs?: number;
+}
+
 /** A real WebSocket wire (the dev server locally; the Durable Object shell
- *  in production). Messages sent before the socket opens are queued; after
- *  close they are dropped — overlays freeze-but-map (I3), typing and syntax
- *  highlighting never notice. */
-export function webSocketTransport(url: string): RemoteTransport & { close(): void } {
-  const ws = new WebSocket(url);
-  const preOpen: ClientMessage[] = [];
+ *  in production). While CONNECTING, sends queue; while DOWN, sends drop —
+ *  overlays freeze-but-map (I3), typing and syntax highlighting never
+ *  notice, and the fresh hello after reconnect recovers everything (I5). */
+export function webSocketTransport(
+  url: string,
+  options: WebSocketTransportOptions = {}
+): RemoteTransport & { close(): void } {
+  const { reconnect = true, maxBackoffMs = 8000 } = options;
   let deliver: (msg: ServerMessage) => void = () => {};
-  ws.addEventListener("open", () => {
-    for (const msg of preOpen.splice(0)) ws.send(JSON.stringify(msg));
-  });
-  ws.addEventListener("message", (event) => {
-    deliver(JSON.parse(String(event.data)) as ServerMessage);
-  });
+  let reset: () => void = () => {};
+  let ws: WebSocket;
+  let preOpen: ClientMessage[] = [];
+  let everOpened = false;
+  let closed = false;
+  let backoff = 500;
+  const connect = (): void => {
+    ws = new WebSocket(url);
+    ws.addEventListener("open", () => {
+      backoff = 500;
+      const isReconnect = everOpened;
+      everOpened = true;
+      // A re-established channel may have lost frames in both directions —
+      // the queued prefix is only safe on the FIRST socket; afterwards the
+      // client's fresh hello (fired via onReset) IS the recovery.
+      if (isReconnect) {
+        preOpen = [];
+        reset();
+      } else {
+        for (const msg of preOpen.splice(0)) ws.send(JSON.stringify(msg));
+      }
+    });
+    ws.addEventListener("message", (event) => {
+      deliver(JSON.parse(String(event.data)) as ServerMessage);
+    });
+    ws.addEventListener("close", () => {
+      if (closed || !reconnect) return;
+      setTimeout(connect, backoff);
+      backoff = Math.min(backoff * 2, maxBackoffMs);
+    });
+  };
+  connect();
   return {
     send(msg) {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-      else if (ws.readyState === WebSocket.CONNECTING) preOpen.push(msg);
+      else if (!everOpened) preOpen.push(msg);
+      // down: drop — the post-reconnect hello supersedes anything queued.
     },
     onMessage(handler) {
       deliver = handler;
     },
+    onReset(handler) {
+      const prev = reset;
+      reset = () => {
+        prev();
+        handler();
+      };
+    },
     close() {
+      closed = true;
       ws.close();
     },
   };
@@ -285,11 +334,20 @@ export class RemoteClient {
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >();
+  private readonly commands = new Map<
+    number,
+    { resolve: (edits: readonly TextEditJSON[]) => void; reject: (e: Error) => void }
+  >();
 
   constructor(transport: RemoteTransport, options: RemoteClientOptions = {}) {
     this.transport = transport;
     this.coalesceMs = options.coalesceMs ?? 15;
     transport.onMessage((msg) => this.receive(msg));
+    // Channel torn + re-established (reconnect): frames may be lost in
+    // both directions — the fresh hello supersedes all of it (I5).
+    transport.onReset?.(() => {
+      if (this.dispatch) this.hello();
+    });
   }
 
   get status(): RemoteStatus {
@@ -386,6 +444,26 @@ export class RemoteClient {
     });
   }
 
+  /** Producer command (ADR-002 §9 over the wire, e.g.
+   *  "musicxml-import.import"). The server computes edits against ITS doc
+   *  and stamps the version; the returned edits are REBASED through
+   *  everything typed since (R1), ready to dispatch against the current
+   *  state. Unsent local changes are flushed first so the server computes
+   *  against what the user is looking at. */
+  command(kind: string, args?: unknown): Promise<readonly TextEditJSON[]> {
+    this.flush();
+    const id = ++this.queryId;
+    return new Promise((resolve, reject) => {
+      this.commands.set(id, { resolve, reject });
+      this.transport.send({
+        type: "command",
+        id,
+        kind,
+        ...(args !== undefined ? { args } : {}),
+      });
+    });
+  }
+
   /** The universal recovery move (I5): full text, version numbering
    *  restarts at 0. Everything in flight from the old generation is dead. */
   private hello(): void {
@@ -421,6 +499,37 @@ export class RemoteClient {
       case "queryError": {
         const pending = this.queries.get(msg.id);
         this.queries.delete(msg.id);
+        pending?.reject(new Error(msg.message));
+        return;
+      }
+      case "commandResult": {
+        const pending = this.commands.get(msg.id);
+        this.commands.delete(msg.id);
+        if (!pending) return;
+        // R1: rebase the server's edits from their version to the present.
+        // atVersion outside the known log = a dead generation (resync
+        // happened while in flight) — the edits' coordinate space is gone.
+        if (msg.atVersion < this.logBase || msg.atVersion > this.version) {
+          pending.reject(new Error("command result superseded by a resync — retry"));
+          return;
+        }
+        const tail = this.log.slice(msg.atVersion - this.logBase);
+        if (tail.length === 0) {
+          pending.resolve(msg.edits);
+          return;
+        }
+        const changes = tail.reduce((all, c) => all.compose(c));
+        pending.resolve(
+          msg.edits.map((e) => {
+            const from = changes.mapPos(e.from, 1);
+            return { from, to: Math.max(from, changes.mapPos(e.to, -1)), insert: e.insert };
+          })
+        );
+        return;
+      }
+      case "commandError": {
+        const pending = this.commands.get(msg.id);
+        this.commands.delete(msg.id);
         pending?.reject(new Error(msg.message));
         return;
       }
