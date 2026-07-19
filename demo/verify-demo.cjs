@@ -692,6 +692,35 @@ async function startServer() {
       );
     }
 
+    // ——— 10b. multi-part sheet renders (Stan screenshot 2026-07-19: OSMD
+    // throws on parts with mismatched measure grids; the failure surfaces
+    // as the in-pane "sheet rendering failed" banner — NOT a console
+    // error, which is why this needs its own check). Tom Sawyer = the
+    // multi-part stress sample (Drumset + phantom Guitar sections). Runs
+    // LAST-before-console so the sample switch can't disturb earlier
+    // cursor/content assertions. ———
+    await page.evaluate(() => {
+      const picker = document.getElementById("sample-picker");
+      const target = [...picker.options].find((o) => /Tom Sawyer/.test(o.textContent));
+      picker.value = target.value;
+      picker.dispatchEvent(new Event("change"));
+    });
+    await page
+      .waitForFunction(
+        () => {
+          const s = document.getElementById("sheet-status");
+          const score = document.getElementById("sheet-score");
+          return (s.hidden && score.childElementCount > 0) || /failed/.test(s.textContent);
+        },
+        { timeout: 15000 }
+      )
+      .catch(() => {});
+    const sheetBanner = await page.$eval("#sheet-status", (el) => (el.hidden ? "" : el.textContent));
+    check(
+      !/failed/.test(sheetBanner),
+      `multi-part sample (Tom Sawyer) renders sheet without failure banner (got: ${sheetBanner || "clean"})`
+    );
+
     // ——— 11. clean console ———
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {
