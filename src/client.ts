@@ -78,8 +78,8 @@ export function tablatureSupport(options: TablatureOptions = {}): Extension[] {
 
 /** BASE-grammar language: the compiled LR tables alone — instant syntax
  *  highlighting/folding with zero semantic code (ADR-003 §2.2). The fat
- *  entry's CmTabParser (which also runs the semantic parse in-process)
- *  must never reach a shipped bundle. */
+ *  entry's wiring-2 parser (language.ts, which also runs the semantic
+ *  parse in-process) must never reach a shipped bundle. */
 export const baseTabLanguage = LRLanguage.define({
   name: "tablature",
   parser: baseParser.configure({ bufferLength: 32 }),

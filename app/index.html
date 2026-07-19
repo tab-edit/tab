@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>tab-edit</title>
+    <link rel="icon" href="../demo/tab-edit-logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 class="brand">
+        <img src="../demo/tab-edit-logo.svg" width="32" height="32" alt="" />
+        <span>tab-edit</span>
+      </h1>
+      <select id="sample-picker" class="sample-picker" title="load a sample tab"></select>
+      <div class="actions">
+        <button id="import-xml">Import MusicXML…</button>
+        <button id="export-xml">Export MusicXML</button>
+        <button id="export-midi">Export MIDI</button>
+        <span id="remote-status" class="remote-status"></span>
+        <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
+      </div>
+    </header>
+    <main class="layout">
+      <section id="editor" class="pane editor-pane"></section>
+      <aside class="pane sheet-pane">
+        <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
+        <div id="sheet-status" class="sheet-status" hidden></div>
+        <div id="sheet-score" class="sheet-score"></div>
+      </aside>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

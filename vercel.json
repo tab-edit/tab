@@ -2,6 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "git config --global url.\"https://x-access-token:${GITHUB_TOKEN}@github.com/\".insteadOf \"ssh://git@github.com/\" && npm install --no-audit --no-fund",
-  "buildCommand": "npm run demo:build",
-  "outputDirectory": "demo/dist"
+  "buildCommand": "npm run app:build",
+  "outputDirectory": "app/dist"
 }
