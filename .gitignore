@@ -4,3 +4,5 @@ node_modules/
 demo/dist
 app/dist
 app/dist-audit
+.vercel
+.env*

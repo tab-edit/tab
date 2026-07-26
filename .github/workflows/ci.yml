@@ -27,5 +27,50 @@ jobs:
       - run: npm ci
       - run: npm run type-check
       - run: npm test
-      - name: Demo builds (the Vercel artifact path)
+      - name: Demo builds (the dev vehicle)
         run: npm run demo:build
+
+  # Push-to-main SHIPS the product page. Vercel's Hobby plan refuses to connect
+  # an org-owned private repo (409 "Upgrade to Pro"), so the git integration is
+  # unavailable and this job IS the deploy trigger. Gated on `test`, so a red
+  # gate can never reach the public site. The artifact audit re-runs here
+  # because what ships is THIS build: the upload is `--prebuilt`, so Vercel
+  # never sees the source and no engine-repo credential leaves GitHub.
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: team_TA1riyqDcG6ldJNxZPLlwU2F
+      VERCEL_PROJECT_ID: prj_ScXqzr1BmCBc5Yv4lGrtY7G9ZA5B
+      # The deployed session host (ADR-003 M-R2) — baked into the client at build time.
+      VITE_REMOTE_URL: wss://tab-edit-session-host.tab-edit.workers.dev/session
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Authorize private @tab-edit git installs
+        env:
+          TOKEN: ${{ secrets.TAB_EDIT_READ_TOKEN }}
+        run: |
+          test -n "$TOKEN" || { echo "::error::TAB_EDIT_READ_TOKEN is not set — add a fine-grained PAT (read-only Contents on the tab-edit repos) as an org or repo Actions secret"; exit 1; }
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+      - run: npm ci
+      - run: npm run app:build
+      - name: Bundle audit — the engine must not ship (CI-fatal)
+        env:
+          AUDIT_ONLY: "1"
+        run: node app/verify-app.cjs
+      - name: Publish the audited artifact to Vercel
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          test -n "$VERCEL_TOKEN" || { echo "::error::VERCEL_TOKEN is not set — mint one at https://vercel.com/account/tokens and add it as an Actions secret"; exit 1; }
+          npm install --global vercel@latest
+          rm -rf .vercel/output
+          mkdir -p .vercel/output/static
+          cp -R app/dist/. .vercel/output/static/
+          printf '{"version":3}\n' > .vercel/output/config.json
+          vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN"

@@ -26,7 +26,32 @@ function check(cond, msg) {
   if (!cond) failures++;
 }
 
-async function wsReachable(url) {
+/** A DEPLOYED host has token auth ON (`wrangler secret put TOKEN_SECRET`), so a
+ *  bare socket to …/session is rejected — the probe has to mint the anonymous
+ *  token exactly like app/main.ts does. Local `wrangler dev`/dev-server run
+ *  with auth OFF and answer "token auth is off"; both shapes work here. */
+async function probeUrl(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  if (!u.pathname.endsWith("/session")) return url;
+  u.searchParams.set("doc", `verify-app-${Date.now()}`);
+  const base = `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}`;
+  try {
+    const response = await fetch(`${base}/token`);
+    const token = await response.text();
+    if (response.ok && token && token !== "token auth is off") {
+      u.searchParams.set("token", token);
+    }
+  } catch {}
+  return u.toString();
+}
+
+async function wsReachable(rawUrl) {
+  const url = await probeUrl(rawUrl);
   return new Promise((resolve) => {
     try {
       const ws = new WebSocket(url);
@@ -49,6 +74,11 @@ async function startSessionHost() {
   if (await wsReachable(wsUrl)) {
     console.log(`session host already on ${wsUrl} — reusing`);
     return { stop: () => {} };
+  }
+  if (process.env.REMOTE_WS) {
+    // An explicit endpoint is a DEPLOYMENT check — spawning a local host here
+    // would poll a URL the child can never serve (the old failure mode).
+    throw new Error(`REMOTE_WS=${wsUrl} is unreachable — token mint or socket refused`);
   }
   const hostDir = path.resolve(ROOT, "..", "remote", "host");
   if (!fs.existsSync(hostDir)) {
@@ -114,6 +144,13 @@ async function startVite() {
 
 (async () => {
   auditBundle();
+  // AUDIT_ONLY is the CI/deploy gate: the trade-secret posture check needs no
+  // browser and no session host, so it can guard a deploy on a runner that has
+  // neither. The live half stays a developer/smoke concern.
+  if (process.env.AUDIT_ONLY) {
+    console.log(failures === 0 ? "\nAUDIT PASSED" : `\n${failures} AUDIT CHECK(S) FAILED`);
+    process.exit(failures === 0 ? 0 : 1);
+  }
   const host = await startSessionHost();
   const server = await startVite();
   const browser = await chromium.launch();
