@@ -14,6 +14,7 @@ import type { TabSemantics } from "./facade.js";
 import { tabLanguage } from "./language.js";
 import { localSnapshotOf } from "./semantics.js";
 import { snapshotSource } from "./snapshot-model.js";
+import { localActivityFrame, localInspectionFrame } from "./state-layer.js";
 
 export type { TablatureOptions } from "./client.js";
 
@@ -42,6 +43,34 @@ export function createLocalSemantics(options: TablatureOptions = {}): TabSemanti
     midiEvents: async (state: EditorState) => midiEvents(state),
     importMusicXml: async (state: EditorState, xml: string) =>
       importMusicXml(state, xml).map((e) => ({ from: e.from, to: e.to, insert: e.insert })),
+    // The engine is in-process, so these resolve immediately — same frames,
+    // same projectors, same panes. A null frame means the syntax tree has
+    // not been produced yet (CM parses asynchronously); an empty frame is
+    // the honest answer for a caller that cannot wait.
+    inspectNode: async (state: EditorState, params) =>
+      localInspectionFrame(state, params) ?? {
+        version: 0,
+        pos: params.pos,
+        chain: [],
+        installWarnings: [],
+      },
+    computeActivity: async (state: EditorState, params) =>
+      localActivityFrame(state, params) ?? {
+        version: 0,
+        passId: 0,
+        sincePass: 0,
+        segments: [],
+        docRecomputes: [],
+        totalRecomputes: 0,
+        unattributed: 0,
+        savings: {
+          recomputedProps: 0,
+          carriedProps: 0,
+          elapsedMs: 0,
+          baselineProps: 0,
+          baselineMs: 0,
+        },
+      },
   };
 }
 
@@ -50,7 +79,10 @@ export {
   computeActivity,
   configureTabHost,
   corePlugins,
+  deepestNodeAt,
   inspectNode,
+  localActivityFrame,
+  localInspectionFrame,
   readTabProp,
   runTabCommand,
   tabStateDiagnostics,
@@ -98,12 +130,50 @@ export type {
 } from "./playback.js";
 export type { RemoteSemantics, RemoteSemanticsOptions } from "./client.js";
 export type {
+  ActivityFrame,
+  ComputeActivityParams,
+  InspectionFrame,
+  InspectNodeParams,
   MidiEvents,
   PlaybackBend,
   PlaybackEvent,
   TabSemantics,
   TextEditData,
 } from "./facade.js";
+export {
+  buildRows,
+  claimPairs,
+  costRows,
+  filterRows,
+  indexActivity,
+  orderRows,
+  outcomeNameFor,
+  packChips,
+  rangesInValue,
+  recomputeTints,
+  savingsLine,
+  segmentRows,
+  splitPropId,
+  stateChips,
+  summarizeValue,
+} from "./inspector-model.js";
+export type {
+  ActivityIndex,
+  ClaimPair,
+  CostRow,
+  OrderedRows,
+  PackChip,
+  PropRow,
+  PropStability,
+  PropState,
+  RecomputeTint,
+  RowFilters,
+  RowOrder,
+  SavingsLine,
+  SegmentRow,
+  StateChip,
+  TintKind,
+} from "./inspector-model.js";
 export {
   directiveAnnotations,
   kindStyling,

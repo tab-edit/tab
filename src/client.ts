@@ -21,7 +21,15 @@ import {
   selectionNodeHighlight,
   soundHighlight,
 } from "./decorations.js";
-import type { MidiEvents, TabSemantics, TextEditData } from "./facade.js";
+import type {
+  ActivityFrame,
+  ComputeActivityParams,
+  InspectionFrame,
+  InspectNodeParams,
+  MidiEvents,
+  TabSemantics,
+  TextEditData,
+} from "./facade.js";
 import { tabHighlighting } from "./highlight.js";
 import { tabLint } from "./lint.js";
 import {
@@ -133,6 +141,28 @@ export function createRemoteSemantics(options: RemoteSemanticsOptions): RemoteSe
     midiEvents: () => client.query("midiEvents") as Promise<MidiEvents>,
     importMusicXml: (_state, xml) =>
       client.command("musicxml-import.import", { xml }) as Promise<readonly TextEditData[]>,
+    // INSPECTION, and the atVersion decision (deliberate — see facade.ts).
+    // query() does not flush, so an unflushed keystroke would leave the
+    // session answering about a document the user has already left: the
+    // frame's ranges would be in coordinates that no longer exist on
+    // screen, and every "click a range to select it" affordance would jump
+    // to the wrong text. So flush FIRST and cite the version we flushed —
+    // the channel is ordered and we are the only writer, so the session
+    // processes those updates before this query and answers at exactly
+    // this version. Citing it is not redundant: if the session is behind
+    // for any other reason (a resync in flight), it says so with
+    // `approximate` instead of quietly answering in stale coordinates.
+    // Cost is one debounced flush on an explicitly-requested debug read —
+    // never the typing path (I3 intact).
+    inspectNode: (_state, params) => {
+      client.flush();
+      return client.query("inspectNode", {
+        ...params,
+        atVersion: client.version,
+      }) as Promise<InspectionFrame>;
+    },
+    computeActivity: (_state, params) =>
+      client.query("computeActivity", params) as Promise<ActivityFrame>,
   };
 }
 
@@ -173,6 +203,40 @@ export type {
 export { sanitizeForOsmd } from "./osmd.js";
 export type { SheetMode } from "./osmd.js";
 export {
+  buildRows,
+  claimPairs,
+  costRows,
+  filterRows,
+  indexActivity,
+  orderRows,
+  outcomeNameFor,
+  packChips,
+  rangesInValue,
+  recomputeTints,
+  savingsLine,
+  segmentRows,
+  splitPropId,
+  stateChips,
+  summarizeValue,
+} from "./inspector-model.js";
+export type {
+  ActivityIndex,
+  ClaimPair,
+  CostRow,
+  OrderedRows,
+  PackChip,
+  PropRow,
+  PropStability,
+  PropState,
+  RecomputeTint,
+  RowFilters,
+  RowOrder,
+  SavingsLine,
+  SegmentRow,
+  StateChip,
+  TintKind,
+} from "./inspector-model.js";
+export {
   selectionHighlightsAt,
   snapshotOf,
   snapshotSource,
@@ -186,6 +250,10 @@ export type {
   SnapshotSource,
 } from "./snapshot-model.js";
 export type {
+  ActivityFrame,
+  ComputeActivityParams,
+  InspectionFrame,
+  InspectNodeParams,
   MidiEvents,
   PlaybackBend,
   PlaybackEvent,

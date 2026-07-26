@@ -7,6 +7,12 @@
 // the bundler then includes or drops the engine automatically. Flipping
 // the product to local-everything is editing that one line.
 import type { EditorState, Extension } from "@codemirror/state";
+import type {
+  ActivityFrame,
+  ComputeActivityParams,
+  InspectionFrame,
+  InspectNodeParams,
+} from "@tab-edit/protocol";
 
 export interface PlaybackBend {
   readonly tick: number;
@@ -55,4 +61,27 @@ export interface TabSemantics {
   midiEvents(state: EditorState): Promise<MidiEvents>;
   /** Returns edits against the CURRENT doc, ready to dispatch. */
   importMusicXml(state: EditorState, xml: string): Promise<readonly TextEditData[]>;
+  /** ENGINE INSPECTION (the plugin author's debugger — see
+   *  docs/design/inspector-over-the-wire.md for why a hidden engine is
+   *  allowed to show this): the ancestor chain at a position, with every
+   *  prop's declared chain, declared reads, value, and cache outcome.
+   *
+   *  Both implementations answer the SAME frame type through the SAME
+   *  projectors, so the panes never branch on mode. The remote one FLUSHES
+   *  first and cites its version, so the frame's ranges are in the
+   *  coordinates on screen (see client.ts for that reasoning). */
+  inspectNode(state: EditorState, params: InspectNodeParams): Promise<InspectionFrame>;
+  /** What the engine ACTUALLY did over a window of passes: per-segment
+   *  reuse, per-prop runs with a taxonomy-level reason, timings, and the
+   *  savings counterfactual. Ask AFTER the reads you want attributed, and
+   *  pass your own `sincePass` — the unaddressed window is a destructive
+   *  read shared by every caller. */
+  computeActivity(state: EditorState, params?: ComputeActivityParams): Promise<ActivityFrame>;
 }
+
+export type {
+  ActivityFrame,
+  ComputeActivityParams,
+  InspectionFrame,
+  InspectNodeParams,
+} from "@tab-edit/protocol";

@@ -346,7 +346,7 @@ export class RemoteClient {
    *  logBase+i+1. Pruned below the newest applied snapshot version. */
   private log: ChangeSet[] = [];
   private logBase = 0;
-  private version = 0;
+  private docVersion = 0;
   private sentVersion = 0;
   private appliedVersion = -1;
   /** Session GENERATION. `version` counts changesets within one generation
@@ -388,10 +388,19 @@ export class RemoteClient {
     return this.dispatch && this.liveEpoch === this.epoch ? "live" : "connecting";
   }
 
+  /** Changesets recorded since hello — the coordinate space every position
+   *  the client sends is expressed in. Public because a caller that cites a
+   *  version must be able to name one: the inspector flushes, then asks
+   *  `atVersion: client.version`, and the answer comes back in the
+   *  coordinates on screen (or flagged `approximate` if it could not). */
+  get version(): number {
+    return this.docVersion;
+  }
+
   /** Local changesets the newest applied frame has not seen — 0 at
    *  quiescence; the UI's staleness affordance reads this. */
   get staleBy(): number {
-    return this.appliedVersion < 0 ? this.version + 1 : this.version - this.appliedVersion;
+    return this.appliedVersion < 0 ? this.docVersion + 1 : this.docVersion - this.appliedVersion;
   }
 
   /** Retained changesets: what the client must still be able to map frames
@@ -445,7 +454,7 @@ export class RemoteClient {
     if (!tr.docChanged) return;
     this.doc = tr.newDoc;
     this.log.push(tr.changes);
-    this.version++;
+    this.docVersion++;
     if (this.log.length > this.maxPendingChanges) {
       // Frames stopped arriving but the socket never closed, so nothing has
       // pruned the log. Retaining more buys nothing — the mapping tail is
@@ -469,7 +478,7 @@ export class RemoteClient {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    if (this.sentVersion === this.version) return;
+    if (this.sentVersion === this.docVersion) return;
     this.transport.send({
       type: "updates",
       fromVersion: this.sentVersion,
@@ -479,7 +488,7 @@ export class RemoteClient {
       // the application RESULT, not just that the input fit.
       toLength: this.doc.length,
     });
-    this.sentVersion = this.version;
+    this.sentVersion = this.docVersion;
     this.scheduleVerify();
   }
 
@@ -500,10 +509,10 @@ export class RemoteClient {
    *  proves nothing. */
   verify(): void {
     if (this.liveEpoch !== this.epoch) return;
-    if (this.sentVersion !== this.version) return;
+    if (this.sentVersion !== this.docVersion) return;
     this.transport.send({
       type: "verify",
-      version: this.version,
+      version: this.docVersion,
       hash: docHash(this.doc.toString()),
     });
   }
@@ -564,7 +573,7 @@ export class RemoteClient {
     this.failPending("session restarted — retry");
     this.log = [];
     this.logBase = 0;
-    this.version = 0;
+    this.docVersion = 0;
     this.sentVersion = 0;
     this.appliedVersion = -1;
     this.epoch++;
@@ -620,7 +629,7 @@ export class RemoteClient {
         // R1: rebase the server's edits from their version to the present.
         // atVersion outside the known log = a dead generation (resync
         // happened while in flight) — the edits' coordinate space is gone.
-        if (msg.atVersion < this.logBase || msg.atVersion > this.version) {
+        if (msg.atVersion < this.logBase || msg.atVersion > this.docVersion) {
           pending.reject(new Error("command result superseded by a resync — retry"));
           return;
         }
@@ -661,7 +670,7 @@ export class RemoteClient {
     if ((epoch ?? this.epoch) !== this.epoch) return;
     if (this.liveEpoch !== this.epoch) return; // frame precedes our helloOk
     if (version < this.appliedVersion) return; // I1 — never regress
-    if (version < this.logBase || version > this.version) return; // unknowable
+    if (version < this.logBase || version > this.docVersion) return; // unknowable
     const tail = this.log.slice(version - this.logBase);
     // The payload mirrors SemanticSnapshot by the three-way lockstep
     // contract (protocol ≡ host snapshot ≡ local producers).
