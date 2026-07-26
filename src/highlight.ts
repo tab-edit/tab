@@ -64,8 +64,14 @@ export function tabTheme(spec: TabThemeSpec): Extension {
       { tag: t.propertyName, color: cssVar("lineName", c.lineName) },
       { tag: t.arithmeticOperator, color: cssVar("technique", c.technique) },
       { tag: t.bitwiseOperator, color: cssVar("embellishment", c.embellishment) },
-      { tag: t.updateOperator, color: cssVar("modifier", c.modifier) },
-      { tag: t.annotation, color: cssVar("modifier", c.modifier) },
+      // Measure-scope modifiers (TimeSignature, Repeat, Multiplier) are
+      // LOAD-BEARING CONFIG, like a recognized directive: they retime or
+      // restructure the bar. Marked by WEIGHT and brightness rather than a
+      // fourth hue — this theme's rule is one hue for notes, one for
+      // techniques, one for ornaments, and everything structural in the gray
+      // ramp. A rare, load-bearing token earns strength, not colour.
+      { tag: t.updateOperator, color: cssVar("modifier", c.modifier), fontWeight: "600" },
+      { tag: t.annotation, color: cssVar("modifier", c.modifier), fontWeight: "600" },
       { tag: t.separator, color: cssVar("scaffold", c.scaffold) },
       { tag: t.documentMeta, color: cssVar("scaffold", c.scaffold) },
       { tag: t.comment, color: cssVar("comment", c.comment) },
@@ -99,7 +105,7 @@ export const defaultDarkTabTheme: TabThemeSpec = {
     lineName: "#9fb3ba", // barely-cyan gray label
     technique: "#c2a884", // muted tan — warm whisper, not amber alarm
     embellishment: "#afa8c9", // dusty lavender
-    modifier: "#c2a884",
+    modifier: "#c9cfd8", // load-bearing config: gray ramp at strength, not a hue
     scaffold: "#868d99", // --text-dim
     comment: "#7d8590",
     prose: "#7d8590",
@@ -117,7 +123,7 @@ export const defaultLightTabTheme: TabThemeSpec = {
     lineName: "#527a85",
     technique: "#8a6d43",
     embellishment: "#6f689a",
-    modifier: "#8a6d43",
+    modifier: "#2f353d", // mirrored: the gray ramp at strength, not a hue
     scaffold: "#6e7781",
     comment: "#6e7781",
     prose: "#9ba1a8",
