@@ -180,6 +180,127 @@ async function startVite() {
     );
     check(true, "sheet renders SVG from the wire musicXml");
 
+    // ——— HOVER EXPLANATIONS ———
+    // The claim is a PAIR, and the second half is the one that keeps the
+    // feature credible: a technique glyph explains itself, and a dash — 70% of
+    // the characters on screen — says nothing at all. A tooltip on every
+    // character would be worse than none.
+    const hoverText = async (needle, offset, wait = 1_600) => {
+      // Scroll FIRST and let CM's measure phase land — reading coordsAtPos in
+      // the same tick returns pre-scroll geometry and the pointer lands on a
+      // different glyph entirely.
+      const pos = await page.evaluate(
+        ([n, o]) => {
+          const p = window.view.state.doc.toString().indexOf(n) + o;
+          window.view.focus();
+          window.view.dispatch({ selection: { anchor: p }, scrollIntoView: true });
+          return p;
+        },
+        [needle, offset]
+      );
+      await page.waitForTimeout(250);
+      const spot = await page.evaluate((p) => {
+        // coordsAtPos gives a CARET rect (a boundary, not a cell), so its
+        // centre sits on the edge between two glyphs and `side` decides which
+        // one you get. Aim at the middle of the cell [p, p+1).
+        const a = window.view.coordsAtPos(p);
+        const b = window.view.coordsAtPos(p + 1);
+        return a && b
+          ? {
+              x: (a.left + b.left) / 2,
+              y: (a.top + a.bottom) / 2,
+              ch: window.view.state.doc.sliceString(p, p + 1),
+            }
+          : null;
+      }, pos);
+      if (!spot) return { text: "", ch: "" };
+      // Park the pointer away first: CM only starts the hover timer on a MOVE.
+      await page.mouse.move(spot.x, spot.y + 60);
+      await page.mouse.move(spot.x, spot.y);
+      await page.waitForTimeout(wait);
+      const text = await page.evaluate(
+        () => document.querySelector(".cm-tab-hover")?.textContent ?? ""
+      );
+      return { text, ch: spot.ch, spot };
+    };
+
+    const hammer = await hoverText("0h3/5", 1);
+    check(
+      hammer.ch === "h" && /^written as a hammer-on/.test(hammer.text),
+      `hovering a technique glyph explains it (${JSON.stringify(hammer.text.slice(0, 90))})`
+    );
+    // The Tier-2 half really arrived over the wire — the base tree alone can
+    // never produce this sentence, because the grammar does not know whether a
+    // hammer BOUND to anything.
+    check(
+      /the note it lands on sounds without a new pick/.test(hammer.text),
+      "…with the semantic outcome, not the grammar's guess"
+    );
+    // NOT under app/: vite serves that directory and a new file there triggers
+    // a full page reload — which wiped __cursorProbe nine seconds later and
+    // looked like a playback bug (diagnosed 2026-07-26).
+    const shot = path.join(require("node:os").tmpdir(), "tab-edit-hover.png");
+    await page.screenshot({ path: shot });
+    console.log(`      (hover screenshot: ${shot})`);
+
+    const fret = await hoverText("|---3---", 4);
+    check(
+      fret.ch === "3" && /this plays/.test(fret.text) && /fret 3 on the/.test(fret.text),
+      `hovering a fret validates it and names the string (${JSON.stringify(fret.text.slice(0, 80))})`
+    );
+
+    const dash = await hoverText("|---3---", 2);
+    check(dash.ch === "-" && dash.text === "", `hovering a dash shows NOTHING (${JSON.stringify(dash.text)})`);
+
+    // ONE tooltip language, one box: with hover installed the linter's own
+    // text tooltip is off, so a diagnostic can never draw two boxes over one
+    // glyph. (The gutter marker reads a separate config and still works.)
+    const lintBoxes = await page.evaluate(
+      () => document.querySelectorAll(".cm-tooltip-lint").length
+    );
+    check(lintBoxes === 0, "the lint text tooltip is merged away — never two boxes over one glyph");
+
+    // Dismissal: typing must clear it, and nothing may be left on screen.
+    await hoverText("0h3/5", 1);
+    await page.keyboard.type("-");
+    await page.keyboard.press("Backspace");
+    await page.waitForTimeout(200);
+    const afterTyping = await page.evaluate(
+      () => document.querySelectorAll(".cm-tab-hover").length
+    );
+    check(afterTyping === 0, "typing dismisses the explanation");
+    await page.mouse.move(10, 10);
+
+    // KEYBOARD PARITY — hover-only information is inaccessible information.
+    // The same box at the caret, on a key every installed map leaves free.
+    await page.evaluate(() => {
+      const p = window.view.state.doc.toString().indexOf("0h3/5") + 1;
+      window.view.focus();
+      window.view.dispatch({ selection: { anchor: p }, scrollIntoView: true });
+    });
+    await page.waitForTimeout(200);
+    await page.keyboard.press("F1");
+    await page.waitForTimeout(1_200);
+    const keyboard = await page.evaluate(() => {
+      const el = document.querySelector(".cm-tab-hover");
+      return {
+        text: el?.textContent ?? "",
+        live: el?.getAttribute("aria-live") ?? "",
+        stillInEditor: !!document.activeElement?.closest?.(".cm-editor"),
+      };
+    });
+    check(
+      /hammer-on/.test(keyboard.text) && keyboard.live === "polite",
+      `F1 explains the caret, and announces itself (${JSON.stringify(keyboard.text.slice(0, 60))} aria-live=${keyboard.live})`
+    );
+    check(keyboard.stillInEditor, "…without taking focus off the document");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(200);
+    const dismissed = await page.evaluate(
+      () => document.querySelectorAll(".cm-tab-hover").length
+    );
+    check(dismissed === 0, "Escape dismisses it — nothing requires dismissal, nothing traps");
+
     // ——— the score cursor, measured the way a USER sees it ———
     // COUNTING elements was the old check, and it is why "the cursor doesn't
     // show" survived a green harness: OSMD's <img> exists whether or not a
@@ -537,6 +658,115 @@ async function startVite() {
       () => document.getElementById("dev-diagnostics")?.textContent ?? ""
     );
     check(problems.length > 0, `PROBLEMS lens renders (${problems.replace(/\s+/g, " ").slice(0, 46)})`);
+    // ——— THE SURFACE WHILE THE MUSIC PLAYS ———
+    // Follow-the-playhead rewrites the editor selection on every sounding
+    // note. Read as cursor moves, that rebuilt the panel per note: it
+    // flickered and ate clicks (mousedown and mouseup landing on two
+    // different elements — Stan, on the shipped surface). The claim now is
+    // that following is CHEAP and STATIONARY: element identity survives the
+    // notes, one click is one click, and the query count is throttled rather
+    // than per-note.
+    await page.click('.dev-lens[data-lens="values"]');
+    await page.waitForFunction(() => document.querySelectorAll("#values-rows .dev-prop").length > 5, {
+      timeout: 15_000,
+    });
+    await page.evaluate(() => {
+      window.__before = new Map();
+      for (const el of document.querySelectorAll("#values-rows .dev-prop")) {
+        window.__before.set(el.dataset.key, el);
+      }
+      window.__chip = document.querySelector('#values-toolbar .dev-chip[data-key^="pack:"]');
+      window.__devCalls.inspect = 0;
+      window.__devCalls.activity = 0;
+      // Count sounding spans the way a user sees them: distinct selections.
+      window.__spans = new Set();
+      window.__spanTick = setInterval(() => {
+        const s = window.view.state.selection.main;
+        window.__spans.add(`${s.from}-${s.to}`);
+      }, 80);
+    });
+    await page.click("#play");
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "⏸", {
+      timeout: 15_000,
+    });
+    await page.waitForTimeout(6_000);
+    const playing = await page.evaluate(() => {
+      let surviving = 0;
+      let recreated = 0;
+      for (const [key, el] of window.__before) {
+        const now = document.querySelector(
+          `#values-rows .dev-prop[data-key="${CSS.escape(key)}"]`
+        );
+        if (!now) continue;
+        if (now === el) surviving++;
+        else recreated++;
+      }
+      return {
+        surviving,
+        recreated,
+        spans: window.__spans.size,
+        calls: { ...window.__devCalls },
+        note: (document.getElementById("dev-breadcrumb")?.textContent ?? "").slice(-40),
+      };
+    });
+    check(
+      playing.spans > 6,
+      `playback moves through a dense passage (${playing.spans} distinct sounding spans)`
+    );
+    check(
+      playing.surviving > 5 && playing.recreated === 0,
+      `row ELEMENTS survive the notes — ${playing.surviving} same elements, ${playing.recreated} rebuilt`
+    );
+    check(
+      playing.calls.inspect < playing.spans && playing.calls.inspect <= 20,
+      `queries are throttled, not per note (${playing.calls.inspect} reads for ${playing.spans} spans)`
+    );
+    // ONE click, mid-playback, on a chip and on a row.
+    const chipBox = await page.evaluate(() => {
+      const r = window.__chip.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, label: window.__chip.textContent };
+    });
+    await page.mouse.click(chipBox.x, chipBox.y);
+    await page.waitForTimeout(400);
+    const chipTook = await page.evaluate(() => ({
+      active: window.__chip.classList.contains("active"),
+      connected: window.__chip.isConnected,
+      rows: document.querySelectorAll("#values-rows .dev-prop").length,
+    }));
+    check(
+      chipTook.active && chipTook.connected,
+      `a pack chip takes ONE click while the music plays (${chipBox.label.trim()} → ${chipTook.rows} rows)`
+    );
+    const rowBox = await page.evaluate(() => {
+      const r = document.querySelector("#values-rows .dev-prop").getBoundingClientRect();
+      return { x: r.left + 120, y: r.top + r.height / 2 };
+    });
+    await page.mouse.click(rowBox.x, rowBox.y);
+    await page.waitForTimeout(400);
+    check(
+      await page.evaluate(() => !!document.querySelector(".dev-detail")),
+      "a prop row takes ONE click while the music plays"
+    );
+    // …and with a row open, the playhead HOLDS: what you are reading does
+    // not move under you, and no further queries are spent.
+    const heldBefore = await page.evaluate(() => ({ ...window.__devCalls }));
+    await page.waitForTimeout(2_500);
+    const held = await page.evaluate(() => ({
+      calls: { ...window.__devCalls },
+      open: !!document.querySelector(".dev-detail"),
+      note: document.getElementById("dev-breadcrumb")?.textContent ?? "",
+    }));
+    check(
+      held.open && held.calls.inspect === heldBefore.inspect,
+      `an open prop row HOLDS the view while playing (${held.calls.inspect - heldBefore.inspect} extra reads)`
+    );
+    check(/held/.test(held.note), `…and the bar says so (${held.note.slice(-38)})`);
+    await page.evaluate(() => clearInterval(window.__spanTick));
+    await page.click("#play"); // pause; leave the transport quiet again
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "▶", {
+      timeout: 5_000,
+    });
+
     const callsBefore = await page.evaluate(() => ({ ...window.__devCalls }));
     await page.click("#dev-toggle");
     await page.evaluate(() => {

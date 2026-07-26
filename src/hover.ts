@@ -244,7 +244,11 @@ function chainValue(frame: FrameLike, id: string): unknown {
   return undefined;
 }
 
-function noteDetail(props: readonly PropLike[], lineNames: readonly string[]): string | null {
+function noteDetail(
+  props: readonly PropLike[],
+  lineNames: readonly string[],
+  problemShown: boolean
+): string | null {
   const sound = asRecord(usable(props, PROP_NOTE_SOUND));
   if (!sound) return null;
   const course = typeof sound.course === "number" ? sound.course : -1;
@@ -266,10 +270,13 @@ function noteDetail(props: readonly PropLike[], lineNames: readonly string[]): s
       parts.push(voiceLabel(String(sound.voiceId)));
       break;
     case "unpitched":
-      // Reached only when the lint gates deliberately kept quiet about this
-      // glyph. Asked directly, the honest answer is still the negative one,
-      // in the same words the engine uses everywhere else.
-      return "nothing gives this a musical meaning here — it is left out of playback and every export";
+      // The lint gates deliberately keep quiet about some of these, and asked
+      // directly the honest answer is still the negative one, in the words
+      // the engine uses everywhere else. But NEVER twice: where the engine
+      // already said it in the box above, repeating it is padding.
+      return problemShown
+        ? null
+        : "nothing gives this a musical meaning here — it is left out of playback and every export";
     default:
       return null;
   }
@@ -306,12 +313,12 @@ function connectorDetail(frame: FrameLike): string | null {
 
 /** THE Tier-2 decision: one appended line, or nothing. Never contradicts
  *  Tier 1 — it reports the same resolution at higher resolution. */
-export function refinedDetail(frame: FrameLike): string | null {
+export function refinedDetail(frame: FrameLike, problemShown = false): string | null {
   const deepest = frame.chain[0];
   if (!deepest) return null;
   const names = chainValue(frame, PROP_LINE_NAMES);
   const lineNames: readonly string[] = Array.isArray(names) ? (names as string[]) : [];
-  if (NOTE_NODES.has(deepest.nodeName)) return noteDetail(deepest.props, lineNames);
+  if (NOTE_NODES.has(deepest.nodeName)) return noteDetail(deepest.props, lineNames, problemShown);
   if (CONNECTOR_NODES.has(deepest.nodeName)) return connectorDetail(frame);
   return null;
 }
@@ -444,7 +451,7 @@ function tooltipView(view: EditorView, pos: number, copy: HoverCopy): TooltipVie
   if (source) {
     withTimeout(source(view.state, { pos }), REFINE_TIMEOUT_MS).then((frame) => {
       if (!live || !frame) return;
-      const detail = refinedDetail(frame);
+      const detail = refinedDetail(frame, copy.problems.length > 0);
       if (!detail) return;
       dom.appendChild(element("cm-tab-hover-detail", detail));
       view.requestMeasure();
@@ -492,19 +499,24 @@ const dismissHover = StateEffect.define<null>();
 
 function hoverSource(view: EditorView, pos: number, side: -1 | 1): Tooltip | Promise<Tooltip | null> | null {
   if (view.state.field(cursorExplanation, false)) return null; // the keyboard box owns the screen
-  const found = factsAt(view.state, pos + (side < 0 ? -1 : 0));
+  // `pos` is the nearest document position; `side` says which CHARACTER the
+  // pointer is actually over. Both tiers must read the SAME character —
+  // asking Tier 2 about `pos` while Tier 1 read `pos - 1` once produced a box
+  // that called a hammer-on "a fret number that plays" (caught by verify:app).
+  const at = pos + (side < 0 ? -1 : 0);
+  const found = factsAt(view.state, at);
   if (!found) return null;
   const copy = instantCopy(found.facts);
   if (!copy) {
     if (!worthRefining(found.facts.written)) return null;
     const kind = WRITTEN_AS.get(String(found.facts.written)) ?? null;
-    return refinedOnly(view, pos, { kind, lead: null, problems: [], detail: null }, found.from, found.to);
+    return refinedOnly(view, at, { kind, lead: null, problems: [], detail: null }, found.from, found.to);
   }
   return {
     pos: found.from,
     end: found.to,
     above: false,
-    create: (v) => tooltipView(v, pos, copy),
+    create: (v) => tooltipView(v, at, copy),
   };
 }
 
@@ -542,9 +554,9 @@ const cursorExplanation = StateField.define<Tooltip | null>({
   provide: (f) => showTooltip.from(f),
 });
 
-/** `Mod-i` — explain what is under the caret. Always returns true: the
- *  editor's content is contenteditable, and letting `Mod-i` through invites
- *  the browser's own italic command into a document that has no such thing. */
+/** Explain what is under the caret. Always returns true: the content is
+ *  contenteditable, and letting the key through invites the browser's own
+ *  editing commands into a document that has no such thing. */
 const explainAtCursor: Command = (view) => {
   if (view.state.field(cursorExplanation, false)) {
     view.dispatch({ effects: showExplanation.of(null) });
@@ -635,8 +647,22 @@ export function tabHover(): Extension {
     cursorExplanation,
     tabHoverTooltip,
     scrollDismiss,
+    // THE KEYS, and why not the obvious ones (measured, not assumed —
+    // verify:app caught the first choice silently doing nothing):
+    //   · `Mod-i` is TAKEN — defaultKeymap binds it to selectParentSyntax
+    //     with preventDefault, from higher precedence than any language
+    //     support, so the binding looked installed and never ran.
+    //   · plain `Alt-…` cannot work on macOS at all: CM deliberately treats
+    //     mac Alt-combinations as typed characters and never falls back to
+    //     the base key name.
+    //   · `F1` is the universal "explain this", and free in every keymap
+    //     this editor installs (F3 = find next, F8 = next diagnostic).
+    //     `Ctrl-Alt-i` is the mnemonic twin for a laptop whose F-row is
+    //     media keys — free on all three platforms, and the ctrl in it is
+    //     what makes the mac base-name fallback apply.
     keymap.of([
-      { key: "Mod-i", run: explainAtCursor },
+      { key: "F1", run: explainAtCursor },
+      { key: "Ctrl-Alt-i", run: explainAtCursor },
       { key: "Escape", run: dismissExplanation },
     ]),
     hoverTheme,

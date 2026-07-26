@@ -177,6 +177,13 @@ describe("refinedDetail — notes", () => {
     ]);
     expect(refinedDetail(frame)).toMatch(/nothing gives this a musical meaning/);
   });
+
+  test("…but NEVER twice: the engine's own diagnostic is already in the box", () => {
+    const frame = frameOf("GlyphNote", [
+      prop("core-pitch/noteSound", { kind: "unpitched", glyph: "q" }),
+    ]);
+    expect(refinedDetail(frame, true)).toBeNull();
+  });
 });
 
 describe("refinedDetail — connectors read the BINDING, never noteSound", () => {
