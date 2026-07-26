@@ -143,6 +143,15 @@ body {
   background: #fff;
 }
 
+/* OSMD emits its playback cursor as an absolutely-positioned <img> at
+   z-index:-1, which paints BEHIND this pane's white paper — correctly placed
+   and completely invisible. Lift it over the score; it is translucent, and
+   multiply keeps the notes readable through it. */
+.sheet-score img[id^="cursorImg"] {
+  z-index: 1 !important;
+  mix-blend-mode: multiply;
+}
+
 .sheet-pane h2 {
   display: flex;
   align-items: center;

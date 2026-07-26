@@ -307,7 +307,17 @@ async function main(): Promise<void> {
     // it is not a choice the user made — restoring the scoping selection is
     // what makes "play the whole thing again" reachable.
     if (scopeSelection && rangeSignature(view.state.selection.ranges) === lastSpanKey) {
-      view.dispatch({ selection: scopeSelection });
+      // An EDIT can stop playback (the doc-changed path), so the scoping
+      // positions may now be past the end — clamp rather than throw.
+      const len = view.state.doc.length;
+      view.dispatch({
+        selection: EditorSelection.create(
+          scopeSelection.ranges.map((r) =>
+            EditorSelection.range(Math.min(r.anchor, len), Math.min(r.head, len))
+          ),
+          scopeSelection.mainIndex
+        ),
+      });
     }
     scopeSelection = null;
     scopeSignature = "";
