@@ -570,11 +570,134 @@ async function startVite() {
     });
     check(values.rows > 10, `VALUES lens renders real props at the cursor (${values.rows})`);
     check(values.withValue > 5, `…with real VALUES (${values.withValue}): ${values.sample.trim()}`);
-    check(values.packs >= 4, `pack + outcome chips with counts (${values.packs})`);
+    check(values.packs >= 4, `pack pills with counts (${values.packs})`);
     check(values.claims > 0, `claims render as bid → outcome pairs (${values.claims})`);
     check(values.stability > 0, `stability badges render (${values.stability})`);
     check(/\d+\/\d+ props served from cache/.test(values.cacheLine), `cache ratio: ${values.cacheLine.slice(0, 40)}`);
     check(values.crumbs > 1, `the context bar breadcrumb names the node chain (${values.crumbs})`);
+
+    // ——— TWO DIMENSIONS, TWO AFFORDANCES ———
+    // `core-taxonomy` (WHO produced this) and `carried` (WHAT HAPPENED to
+    // it) wore identical pills on one line and were immediately confounded
+    // (Stan). The controls must now differ in FORM and in INTERACTION, and
+    // the outcome control must wear the same badge the rows wear.
+    const controls = await page.evaluate(() => ({
+      packs: document.querySelectorAll("#values-toolbar .dev-packs .dev-chip").length,
+      segments: document.querySelectorAll("#values-toolbar .dev-outcome .dev-seg").length,
+      shared: document.querySelectorAll("#values-toolbar .dev-chip.dev-seg").length,
+      segmentDots: document.querySelectorAll("#values-toolbar .dev-outcome .dev-state").length,
+      rowDots: document.querySelectorAll("#values-rows .dev-prop .dev-state").length,
+      dotClasses: [
+        ...new Set(
+          [...document.querySelectorAll("#values-toolbar .dev-outcome .dev-state")].map(
+            (d) => d.className
+          )
+        ),
+      ],
+    }));
+    check(
+      controls.packs >= 4 && controls.segments >= 2 && controls.shared === 0,
+      `packs are pills (${controls.packs}), outcome is a segmented control (${controls.segments}), no shared affordance`
+    );
+    check(
+      controls.segmentDots >= 2 &&
+        controls.rowDots > 0 &&
+        controls.dotClasses.every((c) => /dev-state dev-state-/.test(c)),
+      `the outcome control wears the SAME badge the rows wear (${controls.dotClasses.join(", ")})`
+    );
+    // Packs are a SET: two at once is meaningful and both stay lit.
+    const packButtons = page.locator("#values-toolbar .dev-packs .dev-chip");
+    await packButtons.nth(1).click();
+    await packButtons.nth(2).click();
+    const multi = await page.evaluate(() => ({
+      active: document.querySelectorAll("#values-toolbar .dev-packs .dev-chip.active").length,
+      rows: document.querySelectorAll("#values-rows .dev-prop").length,
+    }));
+    check(multi.active === 2, `packs are MULTI-select — a set (${multi.active} lit, ${multi.rows} rows)`);
+    // Outcome is a PARTITION: picking a second one replaces the first.
+    const segButtons = page.locator("#values-toolbar .dev-outcome .dev-seg");
+    await segButtons.nth(1).click();
+    await segButtons.nth(2).click();
+    const single = await page.evaluate(() => ({
+      active: document.querySelectorAll("#values-toolbar .dev-outcome .dev-seg.active").length,
+      label: document.querySelector("#values-toolbar .dev-outcome .dev-seg.active")?.textContent ?? "",
+    }));
+    check(
+      single.active === 1,
+      `outcome is SINGLE-select — a partition (${single.active} lit: ${single.label.trim()})`
+    );
+    await page.locator("#values-toolbar .dev-outcome .dev-seg").first().click(); // back to all
+    await packButtons.first().click(); // all packs
+    await page.waitForTimeout(200);
+
+    // ——— ONE VOCABULARY IN THE BREADCRUMB ———
+    // It names what the ENGINE built (the vocabulary props attach to), never
+    // the grammar's reading — and it never swaps between the two.
+    const crumbText = await page.evaluate(() =>
+      [...document.querySelectorAll("#dev-breadcrumb .dev-crumb")].map((c) => c.textContent)
+    );
+    check(
+      crumbText.length > 1 &&
+        crumbText.includes("TabDocument") &&
+        !crumbText.some((c) => /TabString|MeasureLine|TabSegmentLine|Fret$/.test(c)),
+      `the breadcrumb speaks the ENGINE's vocabulary (${crumbText.join(" ‹ ")})`
+    );
+    check(
+      await page.evaluate(
+        () =>
+          (document.querySelector("#dev-breadcrumb .dev-crumb")?.title ?? "").includes(
+            "the grammar reads:"
+          )
+      ),
+      "…with the grammar's own reading available on hover, where they can be compared"
+    );
+
+    // ——— A NODE OWNS MANY RANGES ———
+    // A Measure spans every string line of its system; a Sound spans the
+    // columns it occupies across lines. Selecting one range would describe
+    // the node as a fragment of one line, which is a lie about the geometry
+    // the whole product is built on. Test it on a node that genuinely has
+    // several — a Measure in a six-line system.
+    const multiRange = await page.evaluate(async () => {
+      const frame = await window.appSemantics.inspectNode(window.view.state, {
+        pos: window.view.state.selection.main.from,
+      });
+      const node = frame.chain.find((n) => n.ranges.length > 1);
+      return node ? { name: node.nodeName, ranges: node.ranges, index: frame.chain.indexOf(node) } : null;
+    });
+    if (multiRange) {
+      await page.locator("#dev-breadcrumb .dev-crumb").nth(multiRange.index).click();
+      await page.waitForTimeout(200);
+      const selection = await page.evaluate(() =>
+        window.view.state.selection.ranges.map((r) => ({ from: r.from, to: r.to }))
+      );
+      check(
+        selection.length === multiRange.ranges.length &&
+          selection.every((r, i) => r.from === multiRange.ranges[i].from && r.to === multiRange.ranges[i].to),
+        `a breadcrumb click selects ALL of a ${multiRange.name}'s ranges (${selection.length} of ${multiRange.ranges.length}, coordinates matching)`
+      );
+      // The same rule wherever a node is NAMED: the row's node tag.
+      const rowNode = await page.evaluate(() => {
+        const tag = [...document.querySelectorAll("#values-rows .dev-prop .dev-prop-node")].find(
+          (t) => t.classList.contains("dev-clickable")
+        );
+        if (!tag) return null;
+        const r = tag.getBoundingClientRect();
+        return { x: r.left + r.width / 2, y: r.top + r.height / 2, name: tag.textContent };
+      });
+      if (rowNode) {
+        await page.evaluate(() => window.view.dispatch({ selection: { anchor: 0 } }));
+        await page.mouse.click(rowNode.x, rowNode.y);
+        await page.waitForTimeout(200);
+        const tagged = await page.evaluate(() => window.view.state.selection.ranges.length);
+        check(
+          tagged >= 1,
+          `a prop row's node tag selects that node too (${rowNode.name}: ${tagged} range(s))`
+        );
+      }
+    } else {
+      check(false, "expected a multi-range node in the chain at this position");
+    }
 
     // The prop DETAIL: chain, the causal walk, and the pin that survives lenses.
     await page.locator("#values-rows .dev-prop").first().click();
@@ -670,6 +793,11 @@ async function startVite() {
     await page.waitForFunction(() => document.querySelectorAll("#values-rows .dev-prop").length > 5, {
       timeout: 15_000,
     });
+    // Close any open detail first: an open row HOLDS the view by design, and
+    // a held surface would pass the identity check for the wrong reason.
+    const open = page.locator("#values-rows .dev-prop.selected");
+    if ((await open.count()) > 0) await open.first().click();
+    await page.waitForTimeout(300);
     await page.evaluate(() => {
       window.__before = new Map();
       for (const el of document.querySelectorAll("#values-rows .dev-prop")) {
@@ -718,8 +846,10 @@ async function startVite() {
       `row ELEMENTS survive the notes — ${playing.surviving} same elements, ${playing.recreated} rebuilt`
     );
     check(
-      playing.calls.inspect < playing.spans && playing.calls.inspect <= 20,
-      `queries are throttled, not per note (${playing.calls.inspect} reads for ${playing.spans} spans)`
+      playing.calls.inspect > 0 &&
+        playing.calls.inspect < playing.spans &&
+        playing.calls.inspect <= 20,
+      `it FOLLOWS, throttled — not one query per note (${playing.calls.inspect} reads for ${playing.spans} spans)`
     );
     // ONE click, mid-playback, on a chip and on a row.
     const chipBox = await page.evaluate(() => {

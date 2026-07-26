@@ -252,6 +252,18 @@ body {
   font-weight: 600;
 }
 
+.dev-diverge {
+  color: #d9a441;
+  cursor: help;
+}
+
+.dev-vocab {
+  color: var(--text-dim);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 0 7px;
+}
+
 .dev-pos {
   color: var(--text-dim);
   opacity: 0.7;
@@ -385,6 +397,16 @@ body {
   z-index: 1;
 }
 
+/* WHO produced it: a SET, so pills — multi-select, counted, and wearing the
+   same muted treatment the pack name wears inside a row. */
+.dev-packs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
 .dev-chip {
   background: transparent;
   border: 1px solid var(--border);
@@ -403,6 +425,50 @@ body {
   border-color: var(--accent);
   color: var(--text);
   background: rgba(91, 157, 250, 0.14);
+}
+
+.dev-chip-pack {
+  opacity: 0.85;
+}
+
+.dev-chip-pack.active {
+  opacity: 1;
+}
+
+/* WHAT HAPPENED to it: a PARTITION, so ONE segmented control — the same
+   control the lens strip uses, never wrapped or split, and each item wears
+   the dot the rows wear so the filter looks like what it filters. */
+.dev-outcome {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  flex: 0 0 auto;
+}
+
+.dev-seg {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 8px;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dev-seg:hover {
+  color: var(--text);
+}
+
+.dev-seg.active {
+  background: rgba(91, 157, 250, 0.18);
+  color: var(--text);
 }
 
 .dev-filter,
@@ -568,6 +634,15 @@ body {
   margin-left: auto;
 }
 
+.dev-prop-node.dev-clickable {
+  cursor: pointer;
+}
+
+.dev-prop-node.dev-clickable:hover {
+  color: var(--text);
+  text-decoration: underline dotted;
+}
+
 .dev-prop-value {
   color: #b9c4d2;
   overflow: hidden;
@@ -678,7 +753,9 @@ body {
 }
 
 .dev-cause,
-.dev-deps {
+.dev-deps,
+.dev-fixes,
+.dev-cause-inline {
   display: flex;
   align-items: center;
   gap: 6px;

@@ -224,8 +224,13 @@ export function stateChips(rows: readonly PropRow[]): StateChip[] {
 }
 
 export interface RowFilters {
-  readonly pack?: string | null;
+  /** Packs are a SET: wanting two at once is meaningful, so the filter is a
+   *  list and the UI that drives it is multi-select. Empty = every pack. */
+  readonly packs?: readonly string[];
   readonly text?: string;
+  /** Outcome is a PARTITION — a prop is exactly one of carried / recomputed
+   *  / cold / deferred — so the filter is at most one value and the UI that
+   *  drives it is single-select. Empty = every outcome. */
   readonly states?: readonly PropState[];
   readonly stability?: readonly PropStability[];
   /** Only props that ran in the current activity window. */
@@ -237,8 +242,9 @@ export function filterRows(rows: readonly PropRow[], filters: RowFilters): PropR
   const states = filters.states && filters.states.length > 0 ? new Set(filters.states) : null;
   const stability =
     filters.stability && filters.stability.length > 0 ? new Set(filters.stability) : null;
+  const packs = filters.packs && filters.packs.length > 0 ? new Set(filters.packs) : null;
   return rows.filter((row) => {
-    if (filters.pack && row.pack !== filters.pack) return false;
+    if (packs && !packs.has(row.pack)) return false;
     if (states && !states.has(row.state)) return false;
     if (stability && !stability.has(row.stability)) return false;
     if (filters.changedOnly && !row.ranInWindow) return false;

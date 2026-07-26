@@ -216,7 +216,11 @@ test("chips: packs in first-appearance order, outcomes with counts", () => {
 
 test("filters compose: pack, text, outcome, stability, changed-only", () => {
   const rows = buildRows(FRAME, indexActivity(ACTIVITY));
-  expect(filterRows(rows, { pack: "core-taxonomy" })).toHaveLength(5);
+  expect(filterRows(rows, { packs: ["core-taxonomy"] })).toHaveLength(5);
+  // Packs are a SET: two at once is a meaningful question, and the UI that
+  // drives this is multi-select for exactly that reason.
+  expect(filterRows(rows, { packs: ["core-taxonomy", "core-pitch"] })).toHaveLength(6);
+  expect(filterRows(rows, { packs: [] })).toHaveLength(rows.length);
   expect(filterRows(rows, { text: "note" }).map((r) => r.name).sort()).toEqual([
     "noteDuration",
     "noteSound",
@@ -227,7 +231,7 @@ test("filters compose: pack, text, outcome, stability, changed-only", () => {
     "core-pitch/noteSound",
     "core-time/noteDuration",
   ]);
-  expect(filterRows(rows, { pack: "core-pitch", text: "duration" })).toHaveLength(0);
+  expect(filterRows(rows, { packs: ["core-pitch"], text: "duration" })).toHaveLength(0);
 });
 
 test("COST-FIRST by default — and it SAYS SO when there is no cost data yet", () => {

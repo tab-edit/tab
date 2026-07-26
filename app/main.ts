@@ -9,7 +9,7 @@ import { syntaxTree } from "@codemirror/language";
 import type { SyntaxNode } from "@lezer/common";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { searchKeymap } from "@codemirror/search";
-import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import {
   crosshairCursor,
   drawSelection,
@@ -143,6 +143,8 @@ const writeStore = (key: string, value: string): void => {
 
 // Read-only while the music plays (the playhead owns the selection then).
 const editableCompartment = new Compartment();
+/** Marks the selections follow-the-playhead writes (see applySpans). */
+const playheadSelection = Annotation.define<boolean>();
 const rangeSignature = (ranges: readonly { from: number; to: number }[]): string =>
   ranges.map((r) => `${r.from}-${r.to}`).join(",");
 const fmt = (sec: number): string =>
@@ -162,7 +164,7 @@ async function main(): Promise<void> {
   // `let`s initialize, and selection updates fire during startup — calling
   // into them directly would hit the TDZ (the hoisting trap verify:app caught
   // once already).
-  let onSelectionChanged: ((state: EditorState) => void) | null = null;
+  let onSelectionChanged: ((state: EditorState, fromPlayhead: boolean) => void) | null = null;
   /** Same hoisting discipline for the dev surface: the update listener is
    *  installed with the view, long before the surface's `let`s exist. */
   let onDocChanged: (() => void) | null = null;
@@ -211,7 +213,12 @@ async function main(): Promise<void> {
           // than play stale positions (same rule as the demo).
           if (player) stopPlayback();
         }
-        if (update.selectionSet || update.docChanged) onSelectionChanged?.(update.state);
+        if (update.selectionSet || update.docChanged) {
+          onSelectionChanged?.(
+            update.state,
+            update.transactions.some((tr) => tr.annotation(playheadSelection) === true)
+          );
+        }
       }),
     ],
   });
@@ -375,9 +382,13 @@ async function main(): Promise<void> {
   let snapshotTimer: ReturnType<typeof setInterval> | null = null;
 
   // Values-lens view state.
-  let packFilter: string | null = null;
+  /** SET vs PARTITION — the interaction model mirrors the data model (see
+   *  docs/design/UI-PRINCIPLES.md §6, written after these two dimensions
+   *  wore the same pill on one line and were immediately confounded). Packs
+   *  are a set: many at once. Outcome is a partition: exactly one, or all. */
+  const packFilters = new Set<string>();
   let textFilter = "";
-  let stateFilter: PropState[] = [];
+  let stateFilter: PropState | null = null;
   let order: RowOrder = "cost";
   let selectedKey: string | null = null;
   let watch: string[] = (readStore("tab-edit:dev-watch") ?? "").split(",").filter(Boolean);
@@ -450,6 +461,122 @@ async function main(): Promise<void> {
     }, delayMs);
   }
 
+  // ——— WHILE THE MUSIC PLAYS ————————————————————————————————————————————
+  //
+  // Follow-the-playhead writes the editor selection on EVERY sounding note.
+  // Read as cursor moves, those writes made the surface re-read and repaint
+  // per note: the chrome flickered and clicks landed between two different
+  // elements (Stan, on the shipped surface). Three rules answer it, and only
+  // the third is a timer:
+  //
+  //   1. PROVENANCE. A playhead selection is not user intent (annotation
+  //      above). It never resets the user-intent debounce, never moves the
+  //      lens, and never counts as "the user is looking somewhere else".
+  //   2. IDENTITY. Rows, chips and crumbs are keyed and PATCHED IN PLACE
+  //      (see `sync`), so following costs text updates, never a rebuild —
+  //      which is what makes a click land on the element it started on.
+  //   3. STICKINESS. Wherever the user is actually working — pointer inside
+  //      the surface, a button held down, a prop row open, a field focused —
+  //      the playhead does not get to move the view at all.
+  //
+  // WHY FOLLOW AT ALL, rather than freeze? Watching the values tick over
+  // note by note is the best demonstration this surface has: the sound you
+  // hear and the engine's reading of it, side by side. Freezing would trade
+  // the feature away to fix a rendering bug. With (2) in place the chrome is
+  // stationary anyway, so the honest fix is to keep it live and make it
+  // solid — and to hold still exactly where holding still matters.
+  const PLAYHEAD_MIN_MS = 400;
+  /** How long after the pointer last MOVED the surface still counts as being
+   *  pointed at. A pointer merely PARKED over the pane is not aiming at
+   *  anything — blocking on presence alone froze the pane for as long as the
+   *  mouse rested there (found by the harness: it clicks, then never moves
+   *  the mouse again). Movement, press and release all fall inside this
+   *  window, which is what the click-safety rule actually needs. */
+  const POINTER_QUIET_MS = 1200;
+  let lastPlayheadRefresh = 0;
+  let pointerInSurface = false;
+  let lastPointerMove = 0;
+  let pointerHeld = false;
+  let paintPending = false;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Would a repaint right now move something the user is aiming at? */
+  const paintBlocked = (): boolean =>
+    pointerHeld || (pointerInSurface && Date.now() - lastPointerMove < POINTER_QUIET_MS);
+  /** May the playhead move what the surface is LOOKING at? Stickier than
+   *  paint-blocking: an open prop row or a focused field means the user is
+   *  working here, and the view must stay put even though repainting it
+   *  would be safe. */
+  const playheadMayMove = (): boolean =>
+    selectedKey === null &&
+    !paintBlocked() &&
+    !(document.activeElement !== null && devDrawer.contains(document.activeElement));
+
+  devDrawer.addEventListener("pointerenter", () => {
+    pointerInSurface = true;
+    lastPointerMove = Date.now();
+  });
+  devDrawer.addEventListener("pointermove", () => {
+    lastPointerMove = Date.now();
+  });
+  devDrawer.addEventListener("pointerleave", () => {
+    pointerInSurface = false;
+    flushPendingPaint();
+  });
+  // Unconditionally between mousedown and mouseup: a list that re-orders
+  // between the two halves of a click is a click delivered to the wrong row.
+  window.addEventListener("pointerdown", () => {
+    pointerHeld = true;
+  });
+  window.addEventListener("pointerup", () => {
+    pointerHeld = false;
+    flushPendingPaint();
+  });
+  /** The quiet moment after the pointer leaves or the button comes up: the
+   *  surface catches up to whatever it deferred — and to the playhead, which
+   *  may have moved a long way while you were reading. Unconditional rather
+   *  than only-when-pending, so the "held" note can never be left lying. */
+  function flushPendingPaint(): void {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    if (!devOn) return;
+    if (paintBlocked()) {
+      // Still aimed at: try again once the pointer has been still a moment.
+      flushTimer = setTimeout(flushPendingPaint, POINTER_QUIET_MS);
+      return;
+    }
+    paintPending = false;
+    lastPlayheadFree = playheadMayMove();
+    paintDev(true);
+  }
+
+  /** The playhead's own refresh path: throttled, suppressed while the user
+   *  is working, and it never touches the debounce that user moves use. */
+  let lastPlayheadFree = true;
+  function playheadMoved(): void {
+    if (!devOn) return;
+    const mayMove = playheadMayMove();
+    if (mayMove !== lastPlayheadFree) {
+      // Say which of the two it is doing — following, or deliberately
+      // holding still — but only on the TRANSITION: repainting the bar under
+      // a pointer that is resting in the surface is the thing we are fixing.
+      lastPlayheadFree = mayMove;
+      if (mayMove) paintContextBar();
+    }
+    if (!mayMove) return;
+    const now = Date.now();
+    if (now - lastPlayheadRefresh < PLAYHEAD_MIN_MS) {
+      paintContextBar();
+      return;
+    }
+    lastPlayheadRefresh = now;
+    // A dense passage is 8-16 sounding notes a second; at one refresh per
+    // 400 ms this is ≤5 queries/s against a 20/s refill, so playback cannot
+    // starve the interactive budget however fast the music is.
+    scheduleDevRefresh(0);
+  }
+
   // ——— tiny DOM helpers ———
   const button = (
     className: string,
@@ -482,10 +609,76 @@ async function main(): Promise<void> {
   };
   const chip = (text: string, active: boolean, onClick: () => void, title?: string): HTMLElement =>
     button(`dev-chip${active ? " active" : ""}`, text, onClick, title);
-  const selectRange = (from: number, to: number): void => {
+  /** Patch text without touching the node when it has not changed (a write
+   *  to textContent replaces the child text node — cheap, but it also kills
+   *  a native selection inside it). */
+  const setText = (el: HTMLElement, text: string): void => {
+    if (el.textContent !== text) el.textContent = text;
+  };
+
+  /** KEYED RECONCILIATION — the reason a click lands where it started.
+   *
+   *  Same key ⇒ the SAME ELEMENT, patched in place; only genuine order
+   *  changes move a node. Rebuilding a list wholesale is what makes a UI
+   *  eat clicks (mousedown and mouseup on two different elements) and
+   *  flicker; with identity held, a repaint during playback is a few text
+   *  writes and the chrome never moves at all. `create` runs once per key;
+   *  `update` runs on every paint and is where all dynamic content goes. */
+  interface RowSpec {
+    readonly key: string;
+    create(): HTMLElement;
+    update?(el: HTMLElement): void;
+  }
+  function sync(host: HTMLElement, specs: readonly RowSpec[]): void {
+    const existing = new Map<string, HTMLElement>();
+    for (const child of [...host.children]) {
+      const key = (child as HTMLElement).dataset.key;
+      if (key !== undefined) existing.set(key, child as HTMLElement);
+    }
+    let cursor: ChildNode | null = host.firstChild;
+    // Duplicate keys are disambiguated rather than collapsed: a list that
+    // silently drops its second identical row is a worse bug than a rebuilt
+    // one, and callers cannot always prove uniqueness.
+    const seen = new Map<string, number>();
+    for (const spec of specs) {
+      const n = seen.get(spec.key) ?? 0;
+      seen.set(spec.key, n + 1);
+      const key = n === 0 ? spec.key : `${spec.key}~${n}`;
+      let el = existing.get(key);
+      if (el) existing.delete(key);
+      else {
+        el = spec.create();
+        el.dataset.key = key;
+      }
+      spec.update?.(el);
+      if (cursor === el) cursor = el.nextSibling;
+      else host.insertBefore(el, cursor);
+    }
+    for (const el of existing.values()) el.remove();
+  }
+  /** The row's CURRENT data, read by handlers bound once at create time —
+   *  a handler that closed over the row it was created with would act on a
+   *  stale one after the first patch. */
+  const rowData = new WeakMap<HTMLElement, unknown>();
+  const selectRange = (from: number, to: number): void => selectRanges([{ from, to }]);
+  /** A NODE OWNS MANY RANGES — that is the geometry, not a detail: a Measure
+   *  spans every string line of its system, a Sound spans the columns it
+   *  occupies across lines. Selecting only the first range would say the node
+   *  is a fragment of one line, which is a lie about the data model (and the
+   *  one this product least affords: the selection IS a region of the time ×
+   *  voice grid). Same idiom playback's follow already uses in applySpans. */
+  const selectRanges = (ranges: readonly { from: number; to: number }[]): void => {
+    if (ranges.length === 0) return;
     const len = view.state.doc.length;
+    const clamped = ranges
+      .map((r) => ({ from: Math.min(r.from, len), to: Math.min(r.to, len) }))
+      .filter((r) => r.to >= r.from);
+    if (clamped.length === 0) return;
     view.dispatch({
-      selection: EditorSelection.range(Math.min(from, len), Math.min(to, len)),
+      selection: EditorSelection.create(
+        clamped.map((r) => EditorSelection.range(r.from, r.to)),
+        0
+      ),
       scrollIntoView: true,
     });
     view.focus();
@@ -514,8 +707,19 @@ async function main(): Promise<void> {
     );
   }
 
-  function paintDev(): void {
+  function paintDev(force = false): void {
     if (!devOn) return;
+    // NEVER MOVE ANYTHING UNDER A POINTER: a background repaint (a frame
+    // landing, the playhead moving, a timer) waits for the quiet moment
+    // after the pointer leaves or the button comes up. Interaction-driven
+    // paints pass `force` — a chip you just clicked must answer at once.
+    if (!force && paintBlocked()) {
+      paintPending = true;
+      // Deferred, not dropped: a frame that arrived while the pointer was
+      // moving lands as soon as it settles, without needing another event.
+      if (flushTimer === null) flushTimer = setTimeout(flushPendingPaint, POINTER_QUIET_MS);
+      return;
+    }
     paintContextBar();
     paintWatch();
     if (lens === "values") paintValues();
@@ -525,108 +729,207 @@ async function main(): Promise<void> {
   }
 
   // ——— the context bar: breadcrumb + the savings figure, always in view ———
+  //
+  // THE BREADCRUMB NAMES SEMANTIC NODES, and only those (decision,
+  // 2026-07-26). Three reasons, and they generalise:
+  //   1. It is the vocabulary a plugin author programs against — a prop
+  //      declares `on: "Measure"` / `"Sound"`, which are the engine's node
+  //      names. The base tree speaks TabSegmentLine / TabString /
+  //      MeasureLine, and locating someone inside a structure they cannot
+  //      attach anything to is worse than saying nothing.
+  //   2. The parse tree is a HYPOTHESIS: the grammar recovers aggressively
+  //      and the semantic layer discards some of what it produces (an
+  //      uppercase H on a percussion line parses as a technique and is
+  //      refused). A crumb built on the grammar's guess would confidently
+  //      place you inside something the engine threw away.
+  //   3. It costs nothing: the inspection frame IS the ancestor chain.
+  //
+  // So there is NO base-tree fallback. Showing grammar crumbs and swapping
+  // them for engine ones when the frame lands would be the UI changing its
+  // mind in a second vocabulary — principles #7 (never move the user's
+  // world), #9 (honest states) and #10 (one vocabulary). With no frame we
+  // show the position and nothing else; silence is the default.
   function paintContextBar(): void {
     const state = view.state;
     const head = state.selection.main.head;
     const line = state.doc.lineAt(head);
-    const crumbs: HTMLElement[] = [];
-    // The semantic chain when a frame has arrived; otherwise CM's own base
-    // tree, which costs nothing (wiring 2 stores it) and is never stale.
-    const semanticChain = frame && frameIsLive() && frame.chain.length > 0 ? frame.chain : null;
-    if (semanticChain) {
-      semanticChain.forEach((node, i) => {
-        const b = button(
-          "dev-crumb",
-          node.nodeName,
-          () => {
-            const r = node.ranges[0];
-            if (r && frameIsLive()) selectRange(r.from, r.to);
-          },
-          `${node.ranges.map(fmtRange).join(" + ")} — semantic node`
-        );
-        if (i === 0) b.classList.add("dev-crumb-deep");
-        crumbs.push(b);
-      });
-    } else {
-      const chain: SyntaxNode[] = [];
-      for (
-        let n = syntaxTree(state).resolveInner(head, 1) as SyntaxNode | null;
-        n && chain.length < 10;
-        n = n.parent
-      ) {
-        chain.push(n);
-      }
-      chain.forEach((n, i) => {
-        const b = button(
-          "dev-crumb",
-          n.name,
-          () => selectRange(n.from, n.to),
-          `${n.from}-${n.to} — syntax node`
-        );
-        if (i === 0) b.classList.add("dev-crumb-deep");
-        crumbs.push(b);
+    const chain = frame && frameIsLive() ? frame.chain : [];
+    // The syntactic reading is kept ONLY to answer "and what did the grammar
+    // think?" on hover. Where the two disagree is the most informative thing
+    // this surface can say, and on a tooltip it costs no chrome to say it.
+    const syntactic: SyntaxNode[] = [];
+    for (
+      let n = syntaxTree(state).resolveInner(head, 1) as SyntaxNode | null;
+      n && syntactic.length < 8;
+      n = n.parent
+    ) {
+      syntactic.push(n);
+    }
+    const syntaxLine = syntactic.map((n) => n.name).join(" ‹ ");
+    // DIVERGENCE: the grammar found something FINER than anything the engine
+    // built here — the technique-glyph-on-a-percussion-line case. One quiet
+    // marker, with the whole story on hover.
+    const deepestSemantic = chain[0]?.ranges[0];
+    const deepestSyntactic = syntactic[0];
+    const diverges =
+      deepestSemantic !== undefined &&
+      deepestSyntactic !== undefined &&
+      deepestSyntactic.to - deepestSyntactic.from < deepestSemantic.to - deepestSemantic.from &&
+      deepestSyntactic.from >= deepestSemantic.from &&
+      deepestSyntactic.to <= deepestSemantic.to;
+
+    const specs: RowSpec[] = chain.map((node, i) => ({
+      // Keyed by DEPTH, not by name+range: walking down a tab line changes
+      // the ranges every note, and a key that changes every note is a
+      // rebuild wearing a keyed renderer's clothes.
+      key: `crumb:${i}`,
+      create: () => {
+        const b = button("dev-crumb", "", () => {
+          const data = rowData.get(b) as readonly { from: number; to: number }[] | undefined;
+          // The version guard stands: ranges are expressed at the frame's
+          // version, and a MULTI-range selection built from stale
+          // coordinates would scatter across unrelated text — worse than a
+          // single stale one, not better.
+          if (data && frameIsLive()) selectRanges(data);
+        });
+        return b;
+      },
+      update: (elt) => {
+        rowData.set(elt, node.ranges);
+        setText(elt, node.nodeName);
+        elt.title =
+          `${node.ranges.map(fmtRange).join(" + ")} — what the ENGINE built here` +
+          (i === 0 ? `\nthe grammar reads: ${syntaxLine}` : "");
+        elt.classList.toggle("dev-crumb-deep", i === 0);
+      },
+    }));
+    if (diverges) {
+      specs.push({
+        key: "diverge",
+        create: () => span("dev-diverge", "≠"),
+        update: (elt) => {
+          elt.title =
+            `the grammar reads ${deepestSyntactic.name} here (${deepestSyntactic.from}-${deepestSyntactic.to}); ` +
+            "the engine built no node for it. The prop layer is the truth — the parse tree is a hypothesis.";
+        },
       });
     }
-    devBreadcrumbEl.replaceChildren(...crumbs);
-    devBreadcrumbEl.appendChild(span("dev-pos", `${head} · ${line.number}:${head - line.from + 1}`));
-    if (inspectBusy) devBreadcrumbEl.appendChild(span("dev-dim", "reading…"));
-    else if (frameError) devBreadcrumbEl.appendChild(span("dev-error", frameError));
-    else if (frame && !frameIsLive()) {
-      devBreadcrumbEl.appendChild(span("dev-dim", "document moved — ↻"));
+    specs.push({
+      key: "pos",
+      create: () => span("dev-pos", ""),
+      update: (el) => setText(el, `${head} · ${line.number}:${head - line.from + 1}`),
+    });
+    const note = inspectBusy
+      ? { className: "dev-dim", text: "reading…" }
+      : frameError !== null
+        ? { className: "dev-error", text: frameError }
+        : frame && !frameIsLive()
+          ? { className: "dev-dim", text: "document moved — ↻" }
+          : chain.length === 0
+            ? { className: "dev-dim", text: "no reading here yet" }
+            : // While the music plays the surface says which of the two it is
+              // doing — following the notes, or deliberately holding still
+              // because you are working in it. Neither state is a mystery.
+              player !== null && !player.paused
+              ? playheadMayMove()
+                ? { className: "dev-dim", text: "following the playhead" }
+                : { className: "dev-dim", text: "held — following again when you're done" }
+              : null;
+    if (note) {
+      specs.push({
+        key: "note",
+        create: () => span("dev-dim", ""),
+        update: (el) => {
+          el.className = note.className;
+          setText(el, note.text);
+        },
+      });
     }
+    sync(devBreadcrumbEl, specs);
 
     const savings = savingsLine(activity);
-    devSavingsEl.replaceChildren(
-      span(
-        savings.attributed ? "dev-savings-figure" : "dev-savings-figure dev-dim",
-        savings.headline
-      )
-    );
-    if (savings.note) devSavingsEl.appendChild(span("dev-dim", savings.note));
+    sync(devSavingsEl, [
+      {
+        key: "figure",
+        create: () => span("dev-savings-figure", ""),
+        update: (el) => {
+          el.className = savings.attributed ? "dev-savings-figure" : "dev-savings-figure dev-dim";
+          setText(el, savings.headline);
+        },
+      },
+      ...(savings.note
+        ? [
+            {
+              key: "note",
+              create: () => span("dev-dim", ""),
+              update: (el: HTMLElement) => setText(el, savings.note!),
+            },
+          ]
+        : []),
+    ]);
   }
 
   // ——— the watch strip: pinned props, across lenses and across edits ———
-  const rowKey = (row: PropRow): string => `${row.nodeIndex} ${row.id}`;
+  /** A row's identity across frames: NODE KIND + prop id, never the chain
+   *  INDEX. Following the playhead moves the cursor between nodes of
+   *  different depth — a Measure-level position gains FretNote and Sound
+   *  ancestors — which shifts every index and would re-key (and so rebuild)
+   *  every row on a note whose chain is one deeper. Kind + id survives that,
+   *  which is what keeps a row clickable while the music moves. */
+  const rowKey = (row: PropRow): string => `${row.nodeName}|${row.id}`;
   const currentRows = (): PropRow[] => buildRows(frame, indexActivity(activity));
 
   function paintWatch(): void {
     devWatchEl.hidden = watch.length === 0;
     if (watch.length === 0) return;
     const rows = currentRows();
-    devWatchEl.replaceChildren(span("dev-watch-label", "watching"));
-    for (const id of watch) {
-      const row = rows.find((r) => r.id === id);
-      const item = div("dev-watch-chip");
-      item.appendChild(span("dev-watch-name", splitPropId(id).name, id));
-      const text = row ? summarizeValue(row, 44) : "not at this node";
-      // A marked chip is one whose value MOVED since the last FRAME (not the
-      // last repaint — advancing it here would erase the marker on the next
-      // paint, half a second later, which is exactly the moment you are
-      // looking at it). rememberWatch() below advances it, once per frame.
-      const seen = watchSeen.get(id);
-      if (row && seen !== undefined && seen !== text) item.classList.add("changed");
-      item.appendChild(span(row ? "dev-watch-value" : "dev-watch-value dev-dim", text));
-      if (row) item.appendChild(span(`dev-state dev-state-${row.state}`, "", row.state));
-      item.appendChild(
-        button(
-          "dev-watch-x",
-          "×",
-          () => {
-            watch = watch.filter((w) => w !== id);
-            writeStore("tab-edit:dev-watch", watch.join(","));
-            paintDev();
-          },
-          "unpin"
-        )
-      );
-      if (row) {
-        item.addEventListener("click", () => {
-          selectedKey = rowKey(row);
-          setLens("values");
-        });
-      }
-      devWatchEl.appendChild(item);
-    }
+    sync(devWatchEl, [
+      { key: "label", create: () => span("dev-watch-label", "watching") },
+      ...watch.map((id) => ({
+        key: `watch:${id}`,
+        create: () => {
+          const item = div("dev-watch-chip");
+          item.appendChild(span("dev-watch-name", splitPropId(id).name, id));
+          item.appendChild(span("dev-watch-value", ""));
+          item.appendChild(span("dev-state", ""));
+          item.appendChild(
+            button(
+              "dev-watch-x",
+              "×",
+              () => {
+                watch = watch.filter((w) => w !== id);
+                writeStore("tab-edit:dev-watch", watch.join(","));
+                paintDev(true);
+              },
+              "unpin"
+            )
+          );
+          item.addEventListener("click", () => {
+            const row = currentRows().find((r) => r.id === id);
+            if (!row) return;
+            selectedKey = rowKey(row);
+            setLens("values");
+          });
+          return item;
+        },
+        update: (item: HTMLElement) => {
+          const row = rows.find((r) => r.id === id);
+          const text = row ? summarizeValue(row, 44) : "not at this node";
+          // A marked chip is one whose value MOVED since the last FRAME (not
+          // the last repaint — advancing it here would erase the marker on
+          // the next paint, which is exactly the moment you are looking at
+          // it). rememberWatch() advances it, once per frame.
+          const seen = watchSeen.get(id);
+          item.classList.toggle("changed", row !== undefined && seen !== undefined && seen !== text);
+          const value = item.children[1] as HTMLElement;
+          value.className = row ? "dev-watch-value" : "dev-watch-value dev-dim";
+          setText(value, text);
+          const dot = item.children[2] as HTMLElement;
+          dot.className = row ? `dev-state dev-state-${row.state}` : "dev-state";
+          dot.title = row?.state ?? "";
+        },
+      })),
+    ]);
   }
 
   /** Advance the watch strip's memory — called once per arriving frame, so a
@@ -650,172 +953,338 @@ async function main(): Promise<void> {
     const rows = currentRows();
     const index = indexActivity(activity);
 
-    valuesToolbar.replaceChildren(
-      chip(`all (${rows.length})`, packFilter === null, () => {
-        packFilter = null;
-        paintDev();
-      })
-    );
-    for (const c of packChips(rows)) {
-      valuesToolbar.appendChild(
-        chip(`${c.pack} (${c.count})`, packFilter === c.pack, () => {
-          packFilter = packFilter === c.pack ? null : c.pack;
-          paintDev();
-        })
-      );
-    }
-    const states = stateChips(rows);
-    if (states.length > 0) valuesToolbar.appendChild(span("dev-sep", "·"));
-    for (const s of states) {
-      valuesToolbar.appendChild(
-        chip(
-          `${s.state} (${s.count})`,
-          stateFilter.includes(s.state),
-          () => {
-            stateFilter = stateFilter.includes(s.state)
-              ? stateFilter.filter((x) => x !== s.state)
-              : [...stateFilter, s.state];
-            paintDev();
-          },
-          s.state === "carried"
-            ? "reading it did no work at all"
-            : s.state === "recomputed"
-              ? "this read ran compute"
-              : s.state === "cold"
-                ? "ran on a pass with nothing to carry from"
-                : "listed but not evaluated — ask for it by name"
-        )
-      );
-    }
-    const filterInput = document.createElement("input");
-    filterInput.type = "text";
-    filterInput.className = "dev-filter";
-    filterInput.placeholder = "filter props…";
-    filterInput.value = textFilter;
-    filterInput.addEventListener("input", () => {
-      const caret = filterInput.selectionStart;
-      textFilter = filterInput.value;
-      paintDev();
-      const fresh = valuesToolbar.querySelector<HTMLInputElement>(".dev-filter");
-      fresh?.focus();
-      if (caret !== null) fresh?.setSelectionRange(caret, caret);
-    });
-    valuesToolbar.appendChild(filterInput);
-    const orderSelect = document.createElement("select");
-    orderSelect.className = "dev-select";
-    orderSelect.title = "cost-first answers “what is slow” without hunting";
-    for (const [value, label] of [
-      ["cost", "cost first"],
-      ["pack", "by pack"],
-      ["name", "by name"],
-    ] as const) {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      option.selected = order === value;
-      orderSelect.appendChild(option);
-    }
-    orderSelect.addEventListener("change", () => {
-      order = orderSelect.value as RowOrder;
-      paintDev();
-    });
-    valuesToolbar.appendChild(orderSelect);
+    // TOOLBAR — TWO DIMENSIONS, TWO AFFORDANCES.
+    //
+    // `core-taxonomy` answers WHO PRODUCED THIS; `carried` answers WHAT
+    // HAPPENED TO IT this window. Rendered as identical pills on one line
+    // they read as one kind of thing, which is false, so the two got
+    // confounded on sight (Stan, on the shipped surface). The fix is not a
+    // divider — it is to let each control mirror its own data:
+    //
+    //   PACKS   a SET      → multi-select pills, styled like the pack name
+    //                        they filter (the segment before the `/`)
+    //   OUTCOME a PARTITION → ONE segmented control with an explicit `all`,
+    //                        each item wearing the SAME DOT the rows wear
+    //
+    // So you filter by clicking the badge you can already see, and the shape
+    // of the control tells you whether picking a second one is even a
+    // question. No second row, no new hue, no chrome around chrome: the
+    // segmented group's own border is the separation, and it is the same
+    // control the lens strip above already uses.
+    const toolbar: RowSpec[] = [
+      {
+        key: "packs",
+        create: () => div("dev-packs"),
+        update: (host) =>
+          sync(host, [
+            {
+              key: "all",
+              create: () =>
+                button("dev-chip dev-chip-pack", "", () => {
+                  packFilters.clear();
+                  paintDev(true);
+                }),
+              update: (elt) => {
+                setText(elt, `all packs (${rows.length})`);
+                elt.className = `dev-chip dev-chip-pack${packFilters.size === 0 ? " active" : ""}`;
+                elt.title = "every pack that attaches a prop here";
+              },
+            },
+            ...packChips(rows).map((c) => ({
+              key: `pack:${c.pack}`,
+              create: () =>
+                button("dev-chip dev-chip-pack", "", () => {
+                  // Multi-select, because a set is a set: two packs at once
+                  // is a question a plugin author actually asks.
+                  if (packFilters.has(c.pack)) packFilters.delete(c.pack);
+                  else packFilters.add(c.pack);
+                  paintDev(true);
+                }),
+              update: (elt: HTMLElement) => {
+                setText(elt, `${c.pack} (${c.count})`);
+                elt.className = `dev-chip dev-chip-pack${packFilters.has(c.pack) ? " active" : ""}`;
+                elt.title = `props produced by ${c.pack} — click to add or remove it`;
+              },
+            })),
+          ]),
+      },
+      {
+        key: "outcome",
+        create: () => {
+          const group = div("dev-outcome");
+          group.title = "what happened to each prop in the current window";
+          return group;
+        },
+        update: (host) => {
+          const states = stateChips(rows);
+          sync(host, [
+            {
+              key: "all",
+              create: () =>
+                button("dev-seg", "", () => {
+                  stateFilter = null;
+                  paintDev(true);
+                }),
+              update: (elt) => {
+                setText(elt, `all ${rows.length}`);
+                elt.className = `dev-seg${stateFilter === null ? " active" : ""}`;
+                elt.title = "every outcome";
+              },
+            },
+            ...states.map((s) => ({
+              key: `state:${s.state}`,
+              create: () => {
+                const b = button("dev-seg", "", () => {
+                  // Single-select, because a prop is exactly one of these.
+                  // Clicking the active one returns to `all` — forgiving,
+                  // and it keeps the control's own state reachable.
+                  stateFilter = stateFilter === s.state ? null : s.state;
+                  paintDev(true);
+                });
+                // The SAME dot the rows wear: the filter looks like what it
+                // filters, so nothing has to be learned twice.
+                b.appendChild(span(`dev-state dev-state-${s.state}`, ""));
+                b.appendChild(span("dev-seg-label", ""));
+                return b;
+              },
+              update: (elt: HTMLElement) => {
+                elt.className = `dev-seg${stateFilter === s.state ? " active" : ""}`;
+                setText(elt.children[1] as HTMLElement, `${s.state} ${s.count}`);
+                elt.title =
+                  s.state === "carried"
+                    ? "carried — reading it did no work at all"
+                    : s.state === "recomputed"
+                      ? "recomputed — this read ran compute"
+                      : s.state === "cold"
+                        ? "cold — it ran on a pass with nothing to carry from"
+                        : "deferred — listed but not evaluated; ask for it by name";
+              },
+            })),
+          ]);
+        },
+      },
+      {
+        key: "filter",
+        create: () => {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.className = "dev-filter";
+          input.placeholder = "filter props…";
+          input.value = textFilter;
+          input.addEventListener("input", () => {
+            textFilter = input.value;
+            paintDev(true);
+          });
+          return input;
+        },
+        update: (elt) => {
+          const input = elt as HTMLInputElement;
+          // Never write over what the user is typing.
+          if (document.activeElement !== input && input.value !== textFilter) {
+            input.value = textFilter;
+          }
+        },
+      },
+      {
+        key: "order",
+        create: () => {
+          const select = document.createElement("select");
+          select.className = "dev-select";
+          select.title = "cost-first answers “what is slow” without hunting";
+          for (const [value, label] of [
+            ["cost", "cost first"],
+            ["pack", "by pack"],
+            ["name", "by name"],
+          ] as const) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+          }
+          select.value = order;
+          select.addEventListener("change", () => {
+            order = select.value as RowOrder;
+            paintDev(true);
+          });
+          return select;
+        },
+        update: (elt) => {
+          const select = elt as HTMLSelectElement;
+          if (document.activeElement !== select && select.value !== order) select.value = order;
+        },
+      },
+    ];
+    sync(valuesToolbar, toolbar);
 
     // CLAIMS: the negotiation, with its winner.
-    const pairs = claimPairs(rows).filter((p) => packFilter === null || p.claim.pack === packFilter);
-    valuesClaimsEl.replaceChildren();
-    if (pairs.length > 0) {
-      valuesClaimsEl.appendChild(
-        span(
-          "dev-section-title",
-          "Claims",
-          "packs bid for a decision; the winner is what every downstream prop reads"
-        )
-      );
-      for (const pair of pairs) {
-        const row = div("dev-claim");
-        row.appendChild(span("dev-claim-name", pair.outcome?.name ?? pair.claim.name));
-        if (pair.outcome) {
-          row.appendChild(span("dev-claim-outcome", summarizeValue(pair.outcome, 30)));
-        }
-        row.appendChild(span("dev-claim-arrow", "←"));
-        const bids = div("dev-claim-bids");
-        const bidList = readBids(pair.claim.value);
-        for (const bid of bidList) {
-          const won =
-            pair.outcome !== undefined &&
-            JSON.stringify(bid.value) === JSON.stringify(pair.outcome.value);
-          bids.appendChild(span(`dev-bid${won ? " won" : ""}`, bidLabel(bid)));
-        }
-        if (bidList.length === 0) {
-          bids.appendChild(span("dev-dim", summarizeValue(pair.claim, 60)));
-        }
-        row.appendChild(bids);
-        row.addEventListener("click", () => {
-          selectedKey = rowKey(pair.claim);
-          paintDev();
-        });
-        valuesClaimsEl.appendChild(row);
-      }
-    }
+    const pairs = claimPairs(rows).filter(
+      (p) => packFilters.size === 0 || packFilters.has(p.claim.pack)
+    );
+    sync(
+      valuesClaimsEl,
+      pairs.length === 0
+        ? []
+        : [
+            {
+              key: "title",
+              create: () =>
+                span(
+                  "dev-section-title",
+                  "Claims",
+                  "packs bid for a decision; the winner is what every downstream prop reads"
+                ),
+            },
+            ...pairs.map((pair) => ({
+              key: `claim:${rowKey(pair.claim)}`,
+              create: () => {
+                const row = div("dev-claim");
+                row.appendChild(span("dev-claim-name", ""));
+                row.appendChild(span("dev-claim-outcome", ""));
+                row.appendChild(span("dev-claim-arrow", "←"));
+                row.appendChild(div("dev-claim-bids"));
+                row.addEventListener("click", () => {
+                  const data = rowData.get(row) as typeof pair | undefined;
+                  if (!data) return;
+                  selectedKey = rowKey(data.claim);
+                  paintDev(true);
+                });
+                return row;
+              },
+              update: (row: HTMLElement) => {
+                rowData.set(row, pair);
+                setText(row.children[0] as HTMLElement, pair.outcome?.name ?? pair.claim.name);
+                setText(
+                  row.children[1] as HTMLElement,
+                  pair.outcome ? summarizeValue(pair.outcome, 30) : ""
+                );
+                const bidList = readBids(pair.claim.value);
+                sync(
+                  row.children[3] as HTMLElement,
+                  bidList.length === 0
+                    ? [
+                        {
+                          key: "raw",
+                          create: () => span("dev-dim", ""),
+                          update: (b: HTMLElement) => setText(b, summarizeValue(pair.claim, 60)),
+                        },
+                      ]
+                    : bidList.map((bid, i) => ({
+                        key: `bid:${i}`,
+                        create: () => span("dev-bid", ""),
+                        update: (b: HTMLElement) => {
+                          const won =
+                            pair.outcome !== undefined &&
+                            JSON.stringify(bid.value) === JSON.stringify(pair.outcome.value);
+                          b.className = `dev-bid${won ? " won" : ""}`;
+                          setText(b, bidLabel(bid));
+                        },
+                      }))
+                );
+              },
+            })),
+          ]
+    );
 
-    // ROWS.
+    // ROWS. Keyed by node + prop id: the same prop keeps the same element
+    // across repaints, so a click that starts on it ends on it — which is
+    // the whole fix for "I have to click multiple times" during playback.
     const visible = orderRows(
-      filterRows(rows, { pack: packFilter, text: textFilter, states: stateFilter }),
+      filterRows(rows, {
+        packs: [...packFilters],
+        text: textFilter,
+        states: stateFilter ? [stateFilter] : [],
+      }),
       order
     );
-    valuesRowsEl.replaceChildren();
+    const rowSpecs: RowSpec[] = [];
     if (rows.length === 0) {
-      valuesRowsEl.appendChild(
-        div(
-          "dev-empty",
-          frameError
-            ? `inspection failed: ${frameError}`
-            : inspectBusy
-              ? "reading…"
-              : "click a note, a measure or a tab line to see what the engine decided for it"
-        )
-      );
+      const message = frameError
+        ? `inspection failed: ${frameError}`
+        : inspectBusy
+          ? "reading…"
+          : "click a note, a measure or a tab line to see what the engine decided for it";
+      rowSpecs.push({
+        key: "empty",
+        create: () => div("dev-empty"),
+        update: (elt) => setText(elt, message),
+      });
     } else if (visible.rows.length === 0) {
-      valuesRowsEl.appendChild(div("dev-empty", "nothing matches these filters"));
+      rowSpecs.push({
+        key: "empty",
+        create: () => div("dev-empty", "nothing matches these filters"),
+      });
     }
     let lastNode = -1;
     for (const row of visible.rows) {
       if (order === "pack" && row.nodeIndex !== lastNode) {
         lastNode = row.nodeIndex;
-        valuesRowsEl.appendChild(
-          div("dev-node-header", `${row.nodeName}  ${row.ranges.map(fmtRange).join(" + ")}`)
-        );
+        const header = `${row.nodeName}  ${row.ranges.map(fmtRange).join(" + ")}`;
+        rowSpecs.push({
+          key: `node:${row.nodeName}`,
+          create: () => div("dev-node-header"),
+          update: (elt) => setText(elt, header),
+        });
       }
-      valuesRowsEl.appendChild(propRow(row));
-      if (selectedKey === rowKey(row)) valuesRowsEl.appendChild(propDetail(row, index));
+      rowSpecs.push(propRowSpec(row));
+      if (selectedKey === rowKey(row)) {
+        // The detail panel is rebuilt on purpose: it is one element under
+        // the row you just clicked, it holds no scroll state worth keeping,
+        // and its content is deeply conditional.
+        rowSpecs.push({
+          key: `detail:${rowKey(row)}`,
+          create: () => propDetail(row, index),
+          update: (elt) => {
+            const fresh = propDetail(row, index);
+            if (elt.innerHTML !== fresh.innerHTML) elt.replaceChildren(...fresh.childNodes);
+          },
+        });
+      }
     }
+    sync(valuesRowsEl, rowSpecs);
 
     const evaluated = rows.filter((r) => r.evaluated).length;
     const cached = rows.filter((r) => r.state === "carried").length;
-    valuesFooterEl.replaceChildren(
-      span("dev-dim", `${cached}/${evaluated} props served from cache`)
-    );
-    if (visible.costFellBack) {
-      valuesFooterEl.appendChild(
-        span("dev-dim", "· no cost window yet — ordered by pack; type a character to measure one")
-      );
-    }
     const snap = snapshotOf(view.state);
-    if (snap) {
-      const head = view.state.selection.main.head;
-      const sounds = soundRangesAt(snap, head);
-      valuesFooterEl.appendChild(
-        span(
-          "dev-dim",
-          `· at cursor: ${sounds.length > 0 ? `sound ${sounds.map(fmtRange).join(" ")}` : "no sound"}` +
-            ` · document: ${snap.sounds.length} sounds, ${snap.measures.length} measures, ${snap.directives.length} directives`
-        )
-      );
-    }
-    for (const w of frame?.installWarnings ?? []) {
-      valuesFooterEl.appendChild(span("dev-warning", `install warning: ${w}`));
-    }
+    const head = view.state.selection.main.head;
+    const sounds = snap ? soundRangesAt(snap, head) : [];
+    sync(valuesFooterEl, [
+      {
+        key: "cache",
+        create: () => span("dev-dim", ""),
+        update: (elt) => setText(elt, `${cached}/${evaluated} props served from cache`),
+      },
+      ...(visible.costFellBack
+        ? [
+            {
+              key: "fallback",
+              create: () =>
+                span(
+                  "dev-dim",
+                  "· no cost window yet — ordered by pack; type a character to measure one"
+                ),
+            },
+          ]
+        : []),
+      ...(snap
+        ? [
+            {
+              key: "snapshot",
+              create: () => span("dev-dim", ""),
+              update: (elt: HTMLElement) =>
+                setText(
+                  elt,
+                  `· at cursor: ${sounds.length > 0 ? `sound ${sounds.map(fmtRange).join(" ")}` : "no sound"}` +
+                    ` · document: ${snap.sounds.length} sounds, ${snap.measures.length} measures, ${snap.directives.length} directives`
+                ),
+            },
+          ]
+        : []),
+      ...(frame?.installWarnings ?? []).map((w, i) => ({
+        key: `warn:${i}`,
+        create: () => span("dev-warning", ""),
+        update: (elt: HTMLElement) => setText(elt, `install warning: ${w}`),
+      })),
+    ]);
   }
 
   interface Bid {
@@ -858,37 +1327,72 @@ async function main(): Promise<void> {
     return `${bid.at !== undefined ? `${bid.at}: ` : ""}${who}${confidence} → ${value}`;
   };
 
-  function propRow(row: PropRow): HTMLElement {
-    const r = div(`dev-prop${selectedKey === rowKey(row) ? " selected" : ""}`);
-    r.appendChild(span(`dev-state dev-state-${row.state}`, "", row.state));
-    r.appendChild(span("dev-prop-name", row.name, row.id));
-    r.appendChild(span("dev-prop-pack", row.pack));
-    r.appendChild(
-      span(
-        `dev-stab dev-stab-${row.stability}`,
-        row.stability === "stable" ? "stable" : "exp",
-        row.stability === "stable"
-          ? "stable: identity, value shape and meaning are versioned — safe to build on"
-          : "experimental: readable and debuggable, but explicitly changeable"
-      )
-    );
-    if (row.internal) {
-      r.appendChild(
-        span("dev-stab dev-stab-internal", "internal", "not readable by other plugins — no value is carried")
-      );
-    }
-    r.appendChild(span(row.error ? "dev-prop-value dev-error" : "dev-prop-value", summarizeValue(row)));
-    if (row.runs > 0) {
-      r.appendChild(
-        span("dev-cost", `${row.runs}× ${ms(row.selfMs)}`, "runs and self time in the current window")
-      );
-    }
-    r.appendChild(span("dev-prop-node", row.nodeName));
-    r.addEventListener("click", () => {
-      selectedKey = selectedKey === rowKey(row) ? null : rowKey(row);
-      paintDev();
-    });
-    return r;
+  /** One prop row, as a KEYED spec: the skeleton is built once and every
+   *  repaint patches text and classes. Handlers read the row's CURRENT data
+   *  from `rowData` rather than the value they closed over. */
+  function propRowSpec(row: PropRow): RowSpec {
+    return {
+      key: `prop:${rowKey(row)}`,
+      create: () => {
+        const r = div("dev-prop");
+        r.appendChild(span("dev-state", ""));
+        r.appendChild(span("dev-prop-name", ""));
+        r.appendChild(span("dev-prop-pack", ""));
+        r.appendChild(span("dev-stab", ""));
+        r.appendChild(span("dev-stab dev-stab-internal", "internal"));
+        r.appendChild(span("dev-prop-value", ""));
+        r.appendChild(span("dev-cost", ""));
+        const nodeTag = span("dev-prop-node", "");
+        nodeTag.addEventListener("click", (event) => {
+          // "Clicking a node selects the node" must hold wherever a node is
+          // named — so the node tag is the affordance here, and it selects
+          // ALL of that node's ranges.
+          event.stopPropagation();
+          const data = rowData.get(r) as PropRow | undefined;
+          if (data && frameIsLive()) selectRanges(data.ranges);
+        });
+        r.appendChild(nodeTag);
+        r.addEventListener("click", () => {
+          const data = rowData.get(r) as PropRow | undefined;
+          if (!data) return;
+          selectedKey = selectedKey === rowKey(data) ? null : rowKey(data);
+          paintDev(true);
+        });
+        return r;
+      },
+      update: (r) => {
+        rowData.set(r, row);
+        r.className = `dev-prop${selectedKey === rowKey(row) ? " selected" : ""}`;
+        const [dot, name, pack, stab, internal, value, cost, node] = [
+          ...r.children,
+        ] as HTMLElement[];
+        dot.className = `dev-state dev-state-${row.state}`;
+        dot.title = row.state;
+        setText(name, row.name);
+        name.title = row.id;
+        setText(pack, row.pack);
+        stab.className = `dev-stab dev-stab-${row.stability}`;
+        setText(stab, row.stability === "stable" ? "stable" : "exp");
+        stab.title =
+          row.stability === "stable"
+            ? "stable: identity, value shape and meaning are versioned — safe to build on"
+            : "experimental: readable and debuggable, but explicitly changeable";
+        internal.hidden = !row.internal;
+        internal.title = "not readable by other plugins — no value is carried";
+        value.className = row.error ? "dev-prop-value dev-error" : "dev-prop-value";
+        setText(value, summarizeValue(row));
+        cost.hidden = row.runs === 0;
+        if (row.runs > 0) {
+          setText(cost, `${row.runs}× ${ms(row.selfMs)}`);
+          cost.title = "runs and self time in the current window";
+        }
+        setText(node, row.nodeName);
+        node.title = frameIsLive()
+          ? `select this ${row.nodeName} — all ${row.ranges.length} range(s)`
+          : "the document moved — refresh before selecting";
+        node.classList.toggle("dev-clickable", frameIsLive());
+      },
+    };
   }
 
   function propDetail(row: PropRow, index: ReturnType<typeof indexActivity>): HTMLElement {
@@ -902,7 +1406,7 @@ async function main(): Promise<void> {
         () => {
           watch = watch.includes(row.id) ? watch.filter((w) => w !== row.id) : [...watch, row.id];
           writeStore("tab-edit:dev-watch", watch.join(","));
-          paintDev();
+          paintDev(true);
         },
         "keep this prop visible across edits and lenses"
       )
@@ -1034,6 +1538,19 @@ async function main(): Promise<void> {
       if (ranges.length > 0 && frameIsLive()) {
         const jump = div("dev-deps");
         jump.appendChild(span("dev-dim", "ranges:"));
+        // A value's ranges are frequently ONE region across lines (a column
+        // span is exactly that), so offer the whole region as well as its
+        // parts — one extra control, and only when there is more than one.
+        if (ranges.length > 1) {
+          jump.appendChild(
+            button(
+              "dev-link",
+              `all ${ranges.length}`,
+              () => selectRanges(ranges),
+              "select every range in this value as one multi-range selection"
+            )
+          );
+        }
         for (const range of ranges) {
           jump.appendChild(
             button("dev-link", fmtRange(range), () => selectRange(range.from, range.to), "select this range")
@@ -1078,7 +1595,7 @@ async function main(): Promise<void> {
     // The click's own work is real work: attribute it to this window rather
     // than leaving it to surprise the next edit's report.
     await fetchActivity();
-    paintDev();
+    paintDev(true);
   }
 
   function depLink(propId: string, runs?: number, selfMs?: number): HTMLElement {
@@ -1088,8 +1605,8 @@ async function main(): Promise<void> {
       label,
       () => {
         const target = currentRows().find((r) => r.id === propId);
-        packFilter = null;
-        stateFilter = [];
+        packFilters.clear();
+        stateFilter = null;
         if (target) {
           textFilter = "";
           selectedKey = rowKey(target);
@@ -1127,83 +1644,149 @@ async function main(): Promise<void> {
     const showing = diffFrame ?? activity;
     const savings = savingsLine(showing);
 
-    costToolbar.replaceChildren(
-      chip(
-        diffBaseline === null ? "live window" : `since pass ${diffBaseline}`,
-        diffBaseline !== null,
-        () => {
-          // DIFF MODE: name a pass, then watch what has moved since it. The
-          // window is addressable, so it never disturbs the live one.
-          if (diffBaseline === null) diffBaseline = activity?.passId ?? null;
-          else {
-            diffBaseline = null;
-            diffFrame = null;
-          }
-          scheduleDevRefresh(0);
+    sync(costToolbar, [
+      {
+        key: "diff",
+        create: () =>
+          chip(
+            "",
+            false,
+            () => {
+              // DIFF MODE: name a pass, then watch what has moved since it.
+              // The window is addressable, so it never disturbs the live one.
+              if (diffBaseline === null) diffBaseline = activity?.passId ?? null;
+              else {
+                diffBaseline = null;
+                diffFrame = null;
+              }
+              scheduleDevRefresh(0);
+            },
+            "mark this pass and diff against it"
+          ),
+        update: (elt) => {
+          setText(elt, diffBaseline === null ? "live window" : `since pass ${diffBaseline}`);
+          elt.className = `dev-chip${diffBaseline !== null ? " active" : ""}`;
         },
-        "mark this pass and diff against it"
-      ),
-      button("dev-mini", "↻ measure now", () => scheduleDevRefresh(0), "re-read and re-measure")
-    );
-    if (diffBaseline !== null) {
-      costToolbar.appendChild(
-        span(
-          "dev-dim",
-          "diff is PROP-ID granular: which props recomputed, not how their values differ — the engine keeps recompute records, not a history of values"
-        )
-      );
-    }
+      },
+      {
+        key: "measure",
+        create: () =>
+          button("dev-mini", "↻ measure now", () => scheduleDevRefresh(0), "re-read and re-measure"),
+      },
+      ...(diffBaseline !== null
+        ? [
+            {
+              key: "diff-note",
+              create: () =>
+                span(
+                  "dev-dim",
+                  "diff is PROP-ID granular: which props recomputed, not how their values differ — the engine keeps recompute records, not a history of values"
+                ),
+            },
+          ]
+        : []),
+    ]);
 
-    costHeadlineEl.replaceChildren(
-      span(
-        savings.attributed ? "dev-headline-figure" : "dev-headline-figure dev-dim",
-        savings.headline
-      )
-    );
-    if (savings.note) costHeadlineEl.appendChild(span("dev-dim", savings.note));
-    if (showing) {
-      costHeadlineEl.appendChild(
-        span(
-          "dev-dim",
-          `window: passes ${showing.sincePass + 1}–${showing.passId} · ${showing.totalRecomputes} runs` +
-            (showing.savings.baselineMs > 0
-              ? ` · this document cold-booted in ${ms(showing.savings.baselineMs)}`
-              : "")
-        )
-      );
-    }
+    sync(costHeadlineEl, [
+      {
+        key: "figure",
+        create: () => span("dev-headline-figure", ""),
+        update: (elt) => {
+          elt.className = savings.attributed
+            ? "dev-headline-figure"
+            : "dev-headline-figure dev-dim";
+          setText(elt, savings.headline);
+        },
+      },
+      ...(savings.note
+        ? [
+            {
+              key: "note",
+              create: () => span("dev-dim", ""),
+              update: (elt: HTMLElement) => setText(elt, savings.note!),
+            },
+          ]
+        : []),
+      ...(showing
+        ? [
+            {
+              key: "window",
+              create: () => span("dev-dim", ""),
+              update: (elt: HTMLElement) =>
+                setText(
+                  elt,
+                  `window: passes ${showing.sincePass + 1}–${showing.passId} · ${showing.totalRecomputes} runs` +
+                    (showing.savings.baselineMs > 0
+                      ? ` · this document cold-booted in ${ms(showing.savings.baselineMs)}`
+                      : "")
+                ),
+            },
+          ]
+        : []),
+    ]);
 
-    costBodyEl.replaceChildren();
     const costs = costRows(showing);
     if (costs.length === 0) {
-      costBodyEl.appendChild(
-        div("dev-empty", "nothing recomputed in this window — type a character and look again")
-      );
+      sync(costBodyEl, [
+        {
+          key: "empty",
+          create: () =>
+            div("dev-empty", "nothing recomputed in this window — type a character and look again"),
+        },
+      ]);
       return;
     }
     const index = indexActivity(showing);
     const propRows = currentRows();
-    for (const cost of costs) {
-      const r = div("dev-prop");
-      r.appendChild(span("dev-cost-runs", `${cost.runs}×`));
-      r.appendChild(span("dev-cost-ms", ms(cost.selfMs), `worst single run ${ms(cost.maxSelfMs)}`));
-      r.appendChild(span("dev-prop-name", cost.name, cost.propId));
-      r.appendChild(span("dev-prop-pack", cost.pack));
-      if (cost.reason) r.appendChild(span("dev-reason", cost.reason, reasonHelp(cost.reason)));
-      const row = propRows.find((p) => p.id === cost.propId);
-      if (row) {
-        const cause = causeOf(row, index);
-        if (cause.upstream.length > 0) {
+    sync(
+      costBodyEl,
+      costs.map((cost) => ({
+        key: `cost:${cost.propId}`,
+        create: () => {
+          const r = div("dev-prop");
+          r.appendChild(span("dev-cost-runs", ""));
+          r.appendChild(span("dev-cost-ms", ""));
+          r.appendChild(span("dev-prop-name", ""));
+          r.appendChild(span("dev-prop-pack", ""));
+          r.appendChild(span("dev-reason", ""));
           r.appendChild(span("dev-dim", "with:"));
-          for (const edge of cause.upstream.slice(0, 3)) r.appendChild(depLink(edge.propId));
-        }
-        r.addEventListener("click", () => {
-          selectedKey = rowKey(row);
-          setLens("values");
-        });
-      }
-      costBodyEl.appendChild(r);
-    }
+          r.appendChild(div("dev-cause-inline"));
+          r.addEventListener("click", () => {
+            const target = currentRows().find((p) => p.id === cost.propId);
+            if (!target) return;
+            selectedKey = rowKey(target);
+            setLens("values");
+          });
+          return r;
+        },
+        update: (r: HTMLElement) => {
+          const [runs, msEl, name, pack, reason, withLabel, causes] = [
+            ...r.children,
+          ] as HTMLElement[];
+          setText(runs, `${cost.runs}×`);
+          setText(msEl, ms(cost.selfMs));
+          msEl.title = `worst single run ${ms(cost.maxSelfMs)}`;
+          setText(name, cost.name);
+          name.title = cost.propId;
+          setText(pack, cost.pack);
+          reason.hidden = cost.reason === undefined;
+          if (cost.reason) {
+            setText(reason, cost.reason);
+            reason.title = reasonHelp(cost.reason);
+          }
+          const row = propRows.find((p) => p.id === cost.propId);
+          const upstream = row ? causeOf(row, index).upstream.slice(0, 3) : [];
+          withLabel.hidden = upstream.length === 0;
+          sync(
+            causes,
+            upstream.map((edge) => ({
+              key: `up:${edge.propId}`,
+              create: () => depLink(edge.propId),
+            }))
+          );
+        },
+      }))
+    );
   }
 
   // ——— TREE: the whole document, client-side and free ———
@@ -1237,78 +1820,128 @@ async function main(): Promise<void> {
     teach(
       el("tree-teach"),
       "tree",
-      "The document's syntax tree, as the grammar sees it — this is what a plugin's `on:` selectors match. It is CodeMirror's own tree, so it costs no round trip and never goes stale. Click a node to select its text."
+      "The document AS PARSED — the grammar's reading, in the grammar's own vocabulary (TabSegmentLine, TabString, MeasureLine). What the engine BUILT from it is the breadcrumb above and the Values lens, in the vocabulary props attach to; where the two disagree, the prop layer is the truth and this is the hypothesis. Free and never stale: it is CodeMirror's own tree. Click a node to select its text."
     );
     const tree = syntaxTree(view.state);
     const cursorPath = pathOfCursor();
     for (const p of cursorPath) treeExpanded.add(p);
     const deepest = cursorPath[cursorPath.length - 1];
 
-    treeToolbar.replaceChildren(
-      button("dev-mini", "reveal cursor", () => {
-        for (const p of pathOfCursor()) treeExpanded.add(p);
-        paintTree();
-        treeBodyEl.querySelector(".dev-tree-row.at-cursor")?.scrollIntoView({ block: "center" });
-      }),
-      button("dev-mini", "collapse all", () => {
-        treeExpanded.clear();
-        treeExpanded.add("0");
-        paintTree();
-      }),
-      span(
-        "dev-dim",
-        `${tree.length.toLocaleString()} of ${view.state.doc.length.toLocaleString()} chars parsed`
-      )
-    );
-    if (tree.length < view.state.doc.length) {
-      treeToolbar.appendChild(
-        span("dev-warning", "the parse has not reached the end of the document yet")
-      );
-    }
+    sync(treeToolbar, [
+      {
+        key: "vocab",
+        create: () =>
+          span(
+            "dev-vocab",
+            "as parsed",
+            "the grammar's vocabulary — the engine's own nodes are in the breadcrumb and the Values lens"
+          ),
+      },
+      {
+        key: "reveal",
+        create: () =>
+          button("dev-mini", "reveal cursor", () => {
+            for (const p of pathOfCursor()) treeExpanded.add(p);
+            paintTree();
+            treeBodyEl.querySelector(".dev-tree-row.at-cursor")?.scrollIntoView({ block: "center" });
+          }),
+      },
+      {
+        key: "collapse",
+        create: () =>
+          button("dev-mini", "collapse all", () => {
+            treeExpanded.clear();
+            treeExpanded.add("0");
+            paintTree();
+          }),
+      },
+      {
+        key: "parsed",
+        create: () => span("dev-dim", ""),
+        update: (elt) =>
+          setText(
+            elt,
+            `${tree.length.toLocaleString()} of ${view.state.doc.length.toLocaleString()} chars parsed`
+          ),
+      },
+      ...(tree.length < view.state.doc.length
+        ? [
+            {
+              key: "partial",
+              create: () =>
+                span("dev-warning", "the parse has not reached the end of the document yet"),
+            },
+          ]
+        : []),
+    ]);
 
-    treeBodyEl.replaceChildren();
-    const render = (node: SyntaxNode, path: string, depth: number): void => {
+    // Rows are keyed by PATH, so following the playhead down a tab line
+    // moves one `at-cursor` class rather than rebuilding the tree.
+    const specs: RowSpec[] = [];
+    const walk = (node: SyntaxNode, path: string, depth: number): void => {
       const kids: SyntaxNode[] = [];
       for (let c = node.firstChild; c; c = c.nextSibling) kids.push(c);
       const expanded = treeExpanded.has(path);
-      const row = div(`dev-tree-row${path === deepest ? " at-cursor" : ""}`);
-      row.style.paddingLeft = `${depth * 13 + 6}px`;
-      row.appendChild(
-        button(
-          "dev-caret",
-          kids.length === 0 ? "·" : expanded ? "▾" : "▸",
-          () => {
-            if (kids.length === 0) return;
-            if (expanded) treeExpanded.delete(path);
-            else treeExpanded.add(path);
+      const name = node.name;
+      const from = node.from;
+      const to = node.to;
+      const text = view.state.doc.sliceString(from, Math.min(to, from + 30)).replace(/\n/g, "⏎");
+      specs.push({
+        key: `row:${path}`,
+        create: () => {
+          const row = div("dev-tree-row");
+          row.appendChild(button("dev-caret", "", () => {
+            const data = rowData.get(row) as { path: string; leaf: boolean } | undefined;
+            if (!data || data.leaf) return;
+            if (treeExpanded.has(data.path)) treeExpanded.delete(data.path);
+            else treeExpanded.add(data.path);
             paintTree();
-          },
-          kids.length === 0 ? "leaf" : `${kids.length} children`
-        )
-      );
-      row.appendChild(span("dev-tree-name", node.name));
-      row.appendChild(span("dev-tree-range", `${node.from}-${node.to}`));
-      const text = view.state.doc.sliceString(node.from, Math.min(node.to, node.from + 30));
-      if (text.trim().length > 0) {
-        row.appendChild(span("dev-tree-text", text.replace(/\n/g, "⏎")));
-      }
-      row.addEventListener("click", () => selectRange(node.from, node.to));
-      treeBodyEl.appendChild(row);
+          }));
+          row.appendChild(span("dev-tree-name", ""));
+          row.appendChild(span("dev-tree-range", ""));
+          row.appendChild(span("dev-tree-text", ""));
+          row.addEventListener("click", () => {
+            const data = rowData.get(row) as { from: number; to: number } | undefined;
+            if (data) selectRange(data.from, data.to);
+          });
+          return row;
+        },
+        update: (row) => {
+          rowData.set(row, { path, from, to, leaf: kids.length === 0 });
+          row.className = `dev-tree-row${path === deepest ? " at-cursor" : ""}`;
+          row.style.paddingLeft = `${depth * 13 + 6}px`;
+          const [caret, nameEl, range, textEl] = [...row.children] as HTMLElement[];
+          setText(caret, kids.length === 0 ? "·" : expanded ? "▾" : "▸");
+          caret.title = kids.length === 0 ? "leaf" : `${kids.length} children`;
+          setText(nameEl, name);
+          setText(range, `${from}-${to}`);
+          textEl.hidden = text.trim().length === 0;
+          setText(textEl, text);
+        },
+      });
       if (!expanded) return;
       // Lazily rendered children ARE the virtualisation: a collapsed subtree
       // has no DOM at all, so a 16k-char document costs a few dozen rows.
       const cap = treeShowAll.has(path) ? kids.length : 200;
-      kids.slice(0, cap).forEach((kid, i) => render(kid, `${path}.${i}`, depth + 1));
+      kids.slice(0, cap).forEach((kid, i) => walk(kid, `${path}.${i}`, depth + 1));
       if (kids.length > cap) {
-        const more = button("dev-mini", `+${kids.length - cap} more`, () => {
-          treeShowAll.add(path);
-          paintTree();
+        const hidden = kids.length - cap;
+        specs.push({
+          key: `more:${path}`,
+          create: () => {
+            const more = button("dev-mini", "", () => {
+              treeShowAll.add(path);
+              paintTree();
+            });
+            more.style.marginLeft = `${(depth + 1) * 13 + 6}px`;
+            return more;
+          },
+          update: (elt) => setText(elt, `+${hidden} more`),
         });
-        more.style.marginLeft = `${(depth + 1) * 13 + 6}px`;
-        treeBodyEl.appendChild(more);
       }
     };
-    render(tree.topNode as unknown as SyntaxNode, "0", 0);
+    walk(tree.topNode as unknown as SyntaxNode, "0", 0);
+    sync(treeBodyEl, specs);
   }
 
   // ——— PROBLEMS ———
@@ -1319,28 +1952,58 @@ async function main(): Promise<void> {
       "Diagnostics from the packs' diagnostic props, over the wire like every other value. Click one to jump to it; a fix applies as an ordinary edit you can undo."
     );
     const diags = tabDiagnostics(view.state);
-    devDiagCountEl.textContent = diags.length > 0 ? `(${diags.length})` : "";
-    devDiagnosticsEl.replaceChildren();
-    if (diags.length === 0) {
-      devDiagnosticsEl.appendChild(div("dev-empty", "no diagnostics — the document reads cleanly"));
-      return;
-    }
-    for (const d of diags) {
-      const row = div("dev-problem");
-      row.appendChild(span(`dev-sev dev-sev-${d.severity}`, d.severity));
-      row.appendChild(span("dev-problem-msg", d.message));
-      row.appendChild(span("dev-dim", fmtRange(d)));
-      for (const fix of d.actions ?? []) {
-        row.appendChild(
-          button("dev-mini", fix.name, () => {
-            fix.apply(view, d.from, d.to);
-            view.focus();
-          })
-        );
-      }
-      row.addEventListener("click", () => selectRange(d.from, d.to));
-      devDiagnosticsEl.appendChild(row);
-    }
+    setText(devDiagCountEl, diags.length > 0 ? `(${diags.length})` : "");
+    sync(
+      devDiagnosticsEl,
+      diags.length === 0
+        ? [
+            {
+              key: "empty",
+              create: () => div("dev-empty", "no diagnostics — the document reads cleanly"),
+            },
+          ]
+        : diags.map((d, i) => ({
+            // Keyed by POSITION + code, not by index: a diagnostic that
+            // survives an edit keeps its row (and its fix buttons) rather
+            // than being replaced by the one that took its place in the list.
+            key: `diag:${d.from}:${d.to}:${d.message.slice(0, 40)}:${i}`,
+            create: () => {
+              const row = div("dev-problem");
+              row.appendChild(span("dev-sev", ""));
+              row.appendChild(span("dev-problem-msg", ""));
+              row.appendChild(span("dev-dim", ""));
+              row.appendChild(div("dev-fixes"));
+              row.addEventListener("click", () => {
+                const data = rowData.get(row) as typeof d | undefined;
+                if (data) selectRange(data.from, data.to);
+              });
+              return row;
+            },
+            update: (row: HTMLElement) => {
+              rowData.set(row, d);
+              const [sev, msg, range, fixes] = [...row.children] as HTMLElement[];
+              sev.className = `dev-sev dev-sev-${d.severity}`;
+              setText(sev, d.severity);
+              setText(msg, d.message);
+              setText(range, fmtRange(d));
+              sync(
+                fixes,
+                (d.actions ?? []).map((fix, fi) => ({
+                  key: `fix:${fi}`,
+                  create: () =>
+                    button("dev-mini", "", () => {
+                      const data = rowData.get(row) as typeof d | undefined;
+                      const action = data?.actions?.[fi];
+                      if (!action) return;
+                      action.apply(view, data.from, data.to);
+                      view.focus();
+                    }),
+                  update: (b: HTMLElement) => setText(b, fix.name),
+                }))
+              );
+            },
+          }))
+    );
   }
 
   // ——— the master switch ———
@@ -1355,7 +2018,7 @@ async function main(): Promise<void> {
     writeStore("tab-edit:dev-lens", next);
     // A lens that needs wire data and has none yet asks for it once.
     if ((next === "values" || next === "cost") && frame === null && devOn) scheduleDevRefresh(0);
-    else paintDev();
+    else paintDev(true);
   }
 
   function setDev(on: boolean): void {
@@ -1604,6 +2267,12 @@ async function main(): Promise<void> {
         0
       ),
       scrollIntoView: true,
+      // PROVENANCE, not position: follow writes the selection on every
+      // sounding note, and a selection the PLAYHEAD wrote is not a cursor
+      // move the user made. Everything downstream that reacts to "the user
+      // moved" must be able to tell — an annotation is exact, where a
+      // signature comparison is a guess that a repeated span defeats.
+      annotations: playheadSelection.of(true),
     });
   };
   const jumpToPlayhead = (): void => {
@@ -1758,13 +2427,20 @@ async function main(): Promise<void> {
   // inside the current timeline and updates the scope signature so ▶ resumes
   // there; a real selection is left alone, because that is a new SCOPE and
   // togglePlayback rebuilds the player around it.
-  onSelectionChanged = (state) => {
+  onSelectionChanged = (state, fromPlayhead) => {
     // The dev surface follows the cursor — debounced, and only while it is
     // open (setDev/scheduleDevRefresh both no-op when the switch is off, so
-    // a user who never asks for it never spends a query).
+    // a user who never asks for it never spends a query). A selection the
+    // PLAYHEAD wrote takes the throttled, suppressible path instead: it is
+    // not user intent, so it must not reset the user debounce, must not
+    // move the view while you are working in it, and must not spend a query
+    // per sounding note.
     if (devOn) {
-      paintDev(); // the free half (breadcrumb, tree) moves immediately
-      scheduleDevRefresh();
+      if (fromPlayhead) playheadMoved();
+      else {
+        paintDev(); // the free half (breadcrumb, tree) moves immediately
+        scheduleDevRefresh();
+      }
     }
     if (!player || !player.paused || !followPlayhead) return;
     const sel = state.selection;
