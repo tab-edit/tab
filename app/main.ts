@@ -370,6 +370,10 @@ async function main(): Promise<void> {
   };
   const jumpToPlayhead = (): void => {
     if (!player) return;
+    // The PLAYBAR is the source of truth here: both surfaces move to it, not
+    // the other way round. Painting explicitly matters while paused, where the
+    // tick is stopped and would otherwise never catch the notation cursor up.
+    paintTransport();
     const p = player.progress();
     if (!p.spans) return;
     if (rangeSignature(view.state.selection.ranges) !== rangeSignature(p.spans)) {
