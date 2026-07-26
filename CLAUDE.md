@@ -167,6 +167,25 @@ app/                THE PRODUCT PAGE — FEATURE-COMPLETE over the wire,
                     First activity window is UNADDRESSED (an addressed
                     sincePass:0 clamps past the cold pass); later ones name
                     the previous passId.
+                    FOUR RULES THE BUG REPORTS BOUGHT (docs/design/
+                    UI-PRINCIPLES.md is BINDING — read it before any UI
+                    change): (1) every list is KEYED and patched in place
+                    (`sync`), keys content-stable — a row is NODE KIND +
+                    prop id, never the chain index, which shifts whenever
+                    the playhead lands one node deeper; (2) playback
+                    FOLLOWS, throttled to 400ms and suppressed while you
+                    work (open row / focused field / aiming pointer), and
+                    playhead selections are told apart by ANNOTATION, not
+                    by position; (3) the filter row is TWO controls because
+                    it is two dimensions — packs are a SET (multi-select
+                    pills), outcome is a PARTITION (one segmented control
+                    wearing the rows' own dots); (4) the breadcrumb names
+                    SEMANTIC nodes only (no base-tree fallback — swapping
+                    vocabularies is the UI changing its mind), the grammar's
+                    reading rides on its tooltip with a `≠` marker where
+                    they disagree, and a crumb click selects ALL of a node's
+                    ranges (applySpans idiom — a Measure spans every line of
+                    its system).
                     (editor · sheet + tab/standard toggle · full transport
                     with selection-aware playback, ⌖ follow moving BOTH the
                     editor selection and the OSMD cursor · import/export ·
