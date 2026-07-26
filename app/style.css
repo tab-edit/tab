@@ -171,6 +171,77 @@ body {
   display: none;
 }
 
+/* ——— dev drawer: snapshot values, off by default ——— */
+.dev-drawer {
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  max-height: 45%;
+  overflow: auto;
+  font-size: 11px;
+}
+
+.dev-drawer summary {
+  padding: 6px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.dev-drawer summary:hover {
+  color: var(--text);
+}
+
+.dev-body {
+  padding: 8px 14px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dev-count {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.dev-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 5px 14px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.dev-row:hover {
+  background: rgba(91, 157, 250, 0.14);
+}
+
+.dev-key {
+  color: var(--text-dim);
+}
+
+.dev-error {
+  color: #ff8080;
+}
+
+.dev-warning {
+  color: #f0c674;
+}
+
+#dev-toggle[aria-pressed="true"] {
+  color: var(--text);
+  outline: 1px solid var(--border);
+}
+
 .pane-caret {
   background: transparent;
   border: 0;

@@ -26,6 +26,8 @@ import {
   createPlayer,
   sanitizeForOsmd,
   snapshotOf,
+  soundRangesAt,
+  tabDiagnostics,
   type Player,
   type SheetMode,
   type Span,
@@ -74,6 +76,12 @@ const timbrePicker = document.getElementById("timbre-picker") as HTMLSelectEleme
 const sheetModeButton = document.getElementById("sheet-mode") as HTMLButtonElement;
 const sheetToggle = document.getElementById("sheet-toggle") as HTMLButtonElement;
 const sheetPane = document.querySelector(".sheet-pane") as HTMLElement;
+const devToggle = document.getElementById("dev-toggle") as HTMLButtonElement;
+const devDrawer = document.getElementById("dev-drawer") as HTMLElement;
+const devCursorEl = document.getElementById("dev-cursor") as HTMLElement;
+const devDiagnosticsEl = document.getElementById("dev-diagnostics") as HTMLElement;
+const devDiagCountEl = document.getElementById("dev-diag-count") as HTMLElement;
+const devSnapshotEl = document.getElementById("dev-snapshot") as HTMLElement;
 
 // Read-only while the music plays (the playhead owns the selection then).
 const editableCompartment = new Compartment();
@@ -91,6 +99,12 @@ async function main(): Promise<void> {
   }
   const semantics = createSemantics(url ?? "ws://localhost:8787");
   let player: Player | null = null;
+  // Assigned once the transport exists. A HOOK, not a direct call: the update
+  // listener below is installed with the view, long before the transport's
+  // `let`s initialize, and selection updates fire during startup — calling
+  // into them directly would hit the TDZ (the hoisting trap verify:app caught
+  // once already).
+  let onSelectionChanged: ((state: EditorState) => void) | null = null;
 
   const view = new EditorView({
     doc: INITIAL_DOC,
@@ -122,6 +136,7 @@ async function main(): Promise<void> {
           // than play stale positions (same rule as the demo).
           if (player) stopPlayback();
         }
+        if (update.selectionSet || update.docChanged) onSelectionChanged?.(update.state);
       }),
     ],
   });
@@ -192,6 +207,89 @@ async function main(): Promise<void> {
     sheetModeButton.textContent = sheetMode === "tab" ? "standard notation" : "tab notation";
     void renderSheet();
   });
+  // ——— dev drawer: what the engine decided, read off the SNAPSHOT ———
+  // Every value here already crossed the wire for the overlays, so the drawer
+  // adds no engine code to the audited bundle. What it cannot show is
+  // per-node prop provenance (inspectNode's explain chain) — that lives in
+  // the engine and would need its own protocol query.
+  const fmtRange = (r: { from: number; to: number }): string => `${r.from}–${r.to}`;
+  function renderDev(state: EditorState): void {
+    if (devDrawer.hidden) return;
+    const snap = snapshotOf(state);
+    if (!snap) {
+      devCursorEl.textContent = "no snapshot yet — waiting on the host";
+      devDiagnosticsEl.replaceChildren();
+      devSnapshotEl.textContent = "";
+      devDiagCountEl.textContent = "";
+      return;
+    }
+    const head = state.selection.main.head;
+    const line = state.doc.lineAt(head);
+    const sounds = soundRangesAt(snap, head);
+    const measure = snap.measures.findIndex((m) =>
+      m.ranges.some((r) => r.from <= head && head < r.to)
+    );
+    const directives = snap.directives.filter((d) => d.from <= head && head <= d.to);
+    devCursorEl.textContent = [
+      `pos        ${head}   line ${line.number}, col ${head - line.from + 1}`,
+      `sound      ${sounds.length ? sounds.map(fmtRange).join("   ") : "—"}`,
+      `measure    ${measure >= 0 ? `#${measure}` : "—"}`,
+      `directive  ${directives.length ? directives.map((d) => `${d.key}=${d.value}`).join("   ") : "—"}`,
+      `prose      ${snap.recededLineStarts.includes(line.from) ? "yes (receded)" : "no"}`,
+    ].join("\n");
+
+    const diags = tabDiagnostics(state);
+    devDiagCountEl.textContent = `(${diags.length})`;
+    devDiagnosticsEl.replaceChildren(
+      ...(diags.length
+        ? diags.map((d) => {
+            const row = document.createElement("button");
+            row.className = `dev-row dev-${d.severity}`;
+            row.textContent = `${d.severity}  ${fmtRange(d)}  ${d.message}${
+              d.actions && d.actions.length > 0 ? `   [${d.actions.length} fix]` : ""
+            }`;
+            // Clicking a diagnostic is how you get to it — the drawer is a
+            // navigation surface, not just a readout.
+            row.addEventListener("click", () => {
+              view.dispatch({
+                selection: EditorSelection.range(d.from, d.to),
+                scrollIntoView: true,
+              });
+              view.focus();
+            });
+            return row;
+          })
+        : [Object.assign(document.createElement("div"), { textContent: "none" })])
+    );
+
+    devSnapshotEl.textContent = [
+      `sounds         ${snap.sounds.length}`,
+      `measures       ${snap.measures.length}`,
+      `directives     ${snap.directives.length}`,
+      `receded lines  ${snap.recededLineStarts.length}`,
+      `diagnostics    ${snap.diagnostics.length}`,
+    ].join("\n");
+  }
+  const setDev = (on: boolean): void => {
+    devDrawer.hidden = !on;
+    devToggle.setAttribute("aria-pressed", String(on));
+    try {
+      localStorage.setItem("tab-edit:dev", on ? "1" : "0");
+    } catch {
+      /* private mode — the drawer just won't be remembered */
+    }
+    if (on) renderDev(view.state);
+  };
+  devToggle.addEventListener("click", () => setDev(devDrawer.hidden));
+  try {
+    if (localStorage.getItem("tab-edit:dev") === "1") setDev(true);
+  } catch {
+    /* ignore */
+  }
+  // The wire delivers snapshots asynchronously, so poll while the drawer is
+  // open — cheap, and it keeps the readout honest after a reparse.
+  setInterval(() => renderDev(view.state), 500);
+
   // Collapse/expand — OPEN by default (the sheet is half the product). OSMD
   // lays out to the width it sees, so a score rendered while collapsed keeps
   // that geometry: re-render on the way back out.
@@ -278,12 +376,19 @@ async function main(): Promise<void> {
       applySpans(p.spans);
     }
   };
-  const tick = (): void => {
+  /** Paint the transport from the player's CURRENT position, scheduling
+   *  nothing — shared by the running tick and the paused seek below. */
+  const paintTransport = (): void => {
     if (!player) return;
     const p = player.progress();
     slider.value = String(Math.round((p.sec / p.totalSec) * 1000));
     timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
     followSheetCursor(player.scoreTimeAt(p.sec));
+  };
+  const tick = (): void => {
+    if (!player || player.paused) return; // a paused playhead owns nothing
+    paintTransport();
+    const p = player.progress();
     if (followPlayhead && p.spans) {
       const key = rangeSignature(p.spans);
       if (key !== lastSpanKey) {
@@ -333,6 +438,11 @@ async function main(): Promise<void> {
   async function togglePlayback(): Promise<void> {
     if (player && !player.paused) {
       player.pause();
+      // STOP THE TICK. Without this the follow loop keeps running while
+      // paused and rewrites the selection every frame — which silently ate
+      // any click the user made, then made ▶ see a "changed" selection and
+      // rebuild from the play-start position.
+      cancelAnimationFrame(raf);
       playButton.textContent = "▶";
       setEditable(true);
       return;
@@ -389,6 +499,23 @@ async function main(): Promise<void> {
     view.focus();
     raf = requestAnimationFrame(tick);
   }
+
+  // PAUSED, follow on: clicking in the text is a SEEK — follow's other
+  // direction ("play from where I'm pointing"). A caret moves the playhead
+  // inside the current timeline and updates the scope signature so ▶ resumes
+  // there; a real selection is left alone, because that is a new SCOPE and
+  // togglePlayback rebuilds the player around it.
+  onSelectionChanged = (state) => {
+    renderDev(state);
+    if (!player || !player.paused || !followPlayhead) return;
+    const sel = state.selection;
+    if (sel.ranges.some((r) => !r.empty)) return;
+    const sec = player.secAt(sel.main.head);
+    if (sec === undefined) return;
+    player.seek(sec);
+    scopeSignature = rangeSignature(sel.ranges);
+    paintTransport();
+  };
 
   playButton.addEventListener("click", () => void togglePlayback());
   slider.addEventListener("input", () => {

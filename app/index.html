@@ -18,6 +18,7 @@
         <button id="import-xml">Import MusicXML…</button>
         <button id="export-xml">Export MusicXML</button>
         <button id="export-midi">Export MIDI</button>
+        <button id="dev-toggle" class="ghost" title="show what the engine computed for this document">dev</button>
         <span id="remote-status" class="remote-status"></span>
         <input id="import-xml-file" type="file" accept=".musicxml,.xml" hidden />
       </div>
@@ -41,6 +42,24 @@
         </h2>
         <div id="sheet-status" class="sheet-status" hidden></div>
         <div id="sheet-score" class="sheet-score"></div>
+        <!-- Dev drawer: everything here is WIRE data (snapshot values), so it
+             costs the audited bundle nothing. Hidden by default — the clean
+             two-pane page is the product; this is for when you want to see
+             what the engine decided. -->
+        <div id="dev-drawer" class="dev-drawer" hidden>
+          <details open>
+            <summary>At cursor</summary>
+            <div id="dev-cursor" class="dev-body"></div>
+          </details>
+          <details>
+            <summary>Diagnostics <span id="dev-diag-count" class="dev-count"></span></summary>
+            <div id="dev-diagnostics" class="dev-body"></div>
+          </details>
+          <details>
+            <summary>Snapshot</summary>
+            <div id="dev-snapshot" class="dev-body"></div>
+          </details>
+        </div>
       </aside>
     </main>
     <footer class="transport">
