@@ -72,6 +72,8 @@ const timeEl = document.getElementById("transport-time") as HTMLElement;
 const followButton = document.getElementById("follow") as HTMLButtonElement;
 const timbrePicker = document.getElementById("timbre-picker") as HTMLSelectElement;
 const sheetModeButton = document.getElementById("sheet-mode") as HTMLButtonElement;
+const sheetToggle = document.getElementById("sheet-toggle") as HTMLButtonElement;
+const sheetPane = document.querySelector(".sheet-pane") as HTMLElement;
 
 // Read-only while the music plays (the playhead owns the selection then).
 const editableCompartment = new Compartment();
@@ -190,6 +192,16 @@ async function main(): Promise<void> {
     sheetModeButton.textContent = sheetMode === "tab" ? "standard notation" : "tab notation";
     void renderSheet();
   });
+  // Collapse/expand — OPEN by default (the sheet is half the product). OSMD
+  // lays out to the width it sees, so a score rendered while collapsed keeps
+  // that geometry: re-render on the way back out.
+  sheetToggle.addEventListener("click", () => {
+    const collapsed = sheetPane.classList.toggle("collapsed");
+    sheetToggle.textContent = collapsed ? "▸" : "▾";
+    sheetToggle.setAttribute("aria-expanded", String(!collapsed));
+    sheetToggle.title = collapsed ? "expand the sheet pane" : "collapse the sheet pane";
+    if (!collapsed && sheetLoaded) void renderSheet();
+  });
   void renderSheet();
 
   // ——— sheet playback cursor: notation follows the playhead through the
@@ -239,6 +251,12 @@ async function main(): Promise<void> {
   let lastSpanKey = "";
   let followPlayhead = true;
   let playedToEnd = false;
+  // The selection that SCOPED the current player, kept so the transport can
+  // tell a user's selection from one the playhead wrote. Without it, follow
+  // leaves a single sounding span selected, the next ▶ scopes itself to that
+  // span, and there is no way back to the whole score.
+  let scopeSelection: EditorSelection | null = null;
+  let scopeSignature = "";
 
   const setEditable = (on: boolean): void => {
     view.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(on)) });
@@ -285,6 +303,14 @@ async function main(): Promise<void> {
     cancelAnimationFrame(raf);
     player?.stop();
     player = null;
+    // Hand the selection back. If what's on screen is the span FOLLOW wrote,
+    // it is not a choice the user made — restoring the scoping selection is
+    // what makes "play the whole thing again" reachable.
+    if (scopeSelection && rangeSignature(view.state.selection.ranges) === lastSpanKey) {
+      view.dispatch({ selection: scopeSelection });
+    }
+    scopeSelection = null;
+    scopeSignature = "";
     playButton.textContent = "▶";
     slider.disabled = true;
     slider.value = "0";
@@ -295,18 +321,25 @@ async function main(): Promise<void> {
   }
 
   async function togglePlayback(): Promise<void> {
+    if (player && !player.paused) {
+      player.pause();
+      playButton.textContent = "▶";
+      setEditable(true);
+      return;
+    }
     if (player) {
-      if (player.paused) {
+      // PAUSED — the selection is live again, and it is the instruction:
+      // unchanged means resume where we stopped, changed means the user picked
+      // a new range (or cleared it), which is a new player, not a resume.
+      if (rangeSignature(view.state.selection.ranges) === scopeSignature) {
         player.resume();
         playButton.textContent = "⏸";
         setEditable(false);
         raf = requestAnimationFrame(tick);
-      } else {
-        player.pause();
-        playButton.textContent = "▶";
-        setEditable(true);
+        return;
       }
-      return;
+      stopPlayback();
+      playedToEnd = false;
     }
     // ONE wire round trip per play (a query, never on the typing path);
     // the sound map comes from the snapshot already on screen.
@@ -329,6 +362,8 @@ async function main(): Promise<void> {
       sheetStatus("playback: nothing playable here yet");
       return;
     }
+    scopeSelection = view.state.selection;
+    scopeSignature = rangeSignature(view.state.selection.ranges);
     // Play from HERE: a caret on/before a sound starts there; a non-empty
     // selection instead scopes the whole timeline to itself.
     if (!view.state.selection.ranges.some((r) => !r.empty) && !playedToEnd) {
