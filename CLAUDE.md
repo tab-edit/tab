@@ -121,7 +121,26 @@ src/semantics.ts    ADR-003 M-R0: SemanticSnapshot (wire-ready value data:
                     nodesInRanges range algebra — proven ≡ tree queries by
                     exhaustive sweep (tests/semantics.test.ts)
 src/lint.ts         tabDiagnostics → CM lint with FIX ACTIONS (apply =
-                    dispatch edits); source renders SNAPSHOT diagnostics
+                    dispatch edits); source renders SNAPSHOT diagnostics.
+                    tabLint({textTooltips:false}) is how the HOVER merge
+                    turns lint's own text tooltip off (the gutter marker
+                    reads a separate config and is untouched)
+src/hover.ts        HOVER EXPLANATIONS — the document explaining itself,
+                    in the PRODUCT (never dev-gated). THE RULE: the prop
+                    layer is truth, the parse tree is a HYPOTHESIS (`H` on
+                    a hi-hat line parses Hammer and the layer refuses it),
+                    so node type only ever names what the user WROTE.
+                    TIER 1 = snapshot only, synchronous, stands alone:
+                    diagnostics verbatim + authoritative, else sound-map
+                    membership WITH no overlapping diagnostic (an
+                    unresolved glyph IS a child of its Sound — pinned by
+                    tests/hover.test.ts). TIER 2 = one inspectNode once the
+                    hover commits, through the `inspectionSource` facet the
+                    two facade builders populate; APPENDS a line, never
+                    revises. Keys: F1 / Ctrl-Alt-i (Mod-i is defaultKeymap's
+                    selectParentSyntax; mac Alt-combos can never match).
+                    Silent: lattice, barlines, prose, and every construct
+                    with no prop behind it.
 src/selection.ts    selectedNodes (column selections!), midiOfSelection
 src/export.ts       musicXml(state), midiFile(state), importMusicXml(state, xml)
 src/decorations.ts  ViewPlugins ONLY since M-R0 — chord/selection highlights,

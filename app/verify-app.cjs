@@ -185,19 +185,14 @@ async function startVite() {
     // feature credible: a technique glyph explains itself, and a dash — 70% of
     // the characters on screen — says nothing at all. A tooltip on every
     // character would be worse than none.
-    const hoverText = async (needle, offset, wait = 1_600) => {
+    const hoverPos = async (pos, wait = 1_600) => {
       // Scroll FIRST and let CM's measure phase land — reading coordsAtPos in
       // the same tick returns pre-scroll geometry and the pointer lands on a
       // different glyph entirely.
-      const pos = await page.evaluate(
-        ([n, o]) => {
-          const p = window.view.state.doc.toString().indexOf(n) + o;
-          window.view.focus();
-          window.view.dispatch({ selection: { anchor: p }, scrollIntoView: true });
-          return p;
-        },
-        [needle, offset]
-      );
+      await page.evaluate((p) => {
+        window.view.focus();
+        window.view.dispatch({ selection: { anchor: p }, scrollIntoView: true });
+      }, pos);
       await page.waitForTimeout(250);
       const spot = await page.evaluate((p) => {
         // coordsAtPos gives a CARET rect (a boundary, not a cell), so its
@@ -223,6 +218,14 @@ async function startVite() {
       );
       return { text, ch: spot.ch, spot };
     };
+    const hoverText = async (needle, offset, wait) =>
+      hoverPos(
+        await page.evaluate(
+          ([n, o]) => window.view.state.doc.toString().indexOf(n) + o,
+          [needle, offset]
+        ),
+        wait
+      );
 
     const hammer = await hoverText("0h3/5", 1);
     check(
@@ -269,6 +272,19 @@ async function startVite() {
       () => document.querySelectorAll(".cm-tab-hover").length
     );
     check(afterTyping === 0, "typing dismisses the explanation");
+
+    // Scroll dismissal is three links — DOM scroll → an effect → hideOn — and
+    // none of them is exercised by anything else. Setting scrollTop fires the
+    // event without moving the pointer, so nothing re-triggers the hover.
+    await hoverText("0h3/5", 1);
+    await page.evaluate(() => {
+      document.querySelector(".cm-scroller").scrollTop += 200;
+    });
+    await page.waitForTimeout(250);
+    const afterScroll = await page.evaluate(
+      () => document.querySelectorAll(".cm-tab-hover").length
+    );
+    check(afterScroll === 0, "scrolling dismisses the explanation");
     await page.mouse.move(10, 10);
 
     // KEYBOARD PARITY — hover-only information is inaccessible information.
@@ -916,6 +932,34 @@ async function startVite() {
       off.calls.inspect === callsBefore.inspect && off.calls.activity === callsBefore.activity,
       `…and stops every query (${off.calls.inspect}/${off.calls.activity} unchanged)`
     );
+
+    // ——— THE MERGE PAID FOR: fix actions still work ———
+    // Turning off the linter's text tooltip took away the primary place a user
+    // clicked a fix, so the hover box has to carry them. Last, because it
+    // deliberately breaks a line name to summon a diagnostic that HAS one.
+    // Blanking the name (not deleting it) keeps the columns — and the parse —
+    // intact, so the block earns `implicit-line-name` (which carries a fix)
+    // instead of a wall of invalid-syntax. The diagnostic is ZERO-WIDTH at the
+    // divider two columns along, which is where the name would go.
+    const nameAt = await page.evaluate(() => {
+      const p = window.view.state.doc.toString().indexOf("\nG |") + 1;
+      window.view.dispatch({ changes: { from: p, to: p + 1, insert: " " } });
+      return p + 2;
+    });
+    await page.waitForTimeout(3_000); // wire round trip + the linter's own delay
+    await hoverPos(nameAt, 1_800);
+    const fixButton = await page.evaluate(
+      () => document.querySelector(".cm-tab-hover-fix")?.textContent ?? ""
+    );
+    check(fixButton.length > 0, `a diagnostic's FIX button survives the merge (${JSON.stringify(fixButton)})`);
+    if (fixButton) {
+      await page.click(".cm-tab-hover-fix");
+      await page.waitForTimeout(400);
+      const applied = await page.evaluate(() =>
+        window.view.state.doc.toString().includes("\n  G|")
+      );
+      check(applied, "…and clicking it dispatches the edit, exactly as the lint tooltip did");
+    }
 
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {

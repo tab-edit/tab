@@ -477,8 +477,14 @@ async function refinedOnly(
 ): Promise<Tooltip | null> {
   const source = view.state.facet(inspectionSource);
   if (!source) return null;
+  // The document may move while the wire answers — typing with the pointer
+  // parked on a glyph is ordinary behaviour, and CM cancels a pending hover
+  // on pointer movement but not on a keystroke. `from`/`to` were computed
+  // before the await, so an answer arriving into an edited document would
+  // anchor a box at coordinates that no longer mean anything.
+  const startDoc = view.state.doc;
   const frame = await withTimeout(source(view.state, { pos }), REFINE_TIMEOUT_MS);
-  if (!frame) return null;
+  if (!frame || view.state.doc !== startDoc) return null;
   const detail = refinedDetail(frame);
   if (!detail) return null;
   const full: HoverCopy = { ...copy, detail };
@@ -494,7 +500,13 @@ async function refinedOnly(
 
 /** Scroll dismissal: hover tooltips are dismissed by transactions, and a
  *  scroll is not one. This effect makes it one — dispatched only while a
- *  tooltip is actually up, so idle scrolling costs nothing. */
+ *  POINTER tooltip is actually up, so idle scrolling costs nothing.
+ *
+ *  Deliberately not the caret box: a pointer tooltip loses its meaning the
+ *  moment the text slides out from under the pointer, but a caret-anchored
+ *  one is still anchored to the caret, which scrolled with the text. The
+ *  keyboard user asked for it; taking it away because the page moved would
+ *  be the hostile reading of "dismiss on scroll". */
 const dismissHover = StateEffect.define<null>();
 
 function hoverSource(view: EditorView, pos: number, side: -1 | 1): Tooltip | Promise<Tooltip | null> | null {
