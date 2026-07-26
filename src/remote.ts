@@ -311,6 +311,18 @@ export interface RemoteClientOptions {
   /** Upstream burst coalescing in ms (ADR-003 §4). 0 = every transaction
    *  sends immediately (tests, loopback). Default 15. */
   readonly coalesceMs?: number;
+  /** How many un-snapshotted changesets the client will retain before it
+   *  gives up on incremental recovery and re-hellos (default 2000).
+   *
+   *  The VERSION cannot overflow — it is a JS integer counting changesets
+   *  within one session (2^53 changesets ≈ 14 million years of nonstop
+   *  typing, and every hello resets it to 0). The LOG it indexes is the
+   *  real resource: entries are pruned only when a snapshot is applied, so
+   *  a server that goes silent WITHOUT the socket closing (half-open TCP,
+   *  a hung or evicted host) leaves the client retaining one changeset per
+   *  keystroke forever. Capping it turns an unbounded leak into the
+   *  protocol's ordinary recovery move (I5: resync is always safe). */
+  readonly maxPendingChanges?: number;
 }
 
 export type RemoteStatus = "connecting" | "live";
@@ -318,6 +330,7 @@ export type RemoteStatus = "connecting" | "live";
 export class RemoteClient {
   private readonly transport: RemoteTransport;
   private readonly coalesceMs: number;
+  private readonly maxPendingChanges: number;
   private dispatch: ((effects: readonly StateEffect<SemanticSnapshot>[]) => void) | null = null;
   private doc: Text = Text.empty;
   /** Changesets recorded since hello; log[i] takes version logBase+i to
@@ -327,10 +340,17 @@ export class RemoteClient {
   private version = 0;
   private sentVersion = 0;
   private appliedVersion = -1;
-  /** Outstanding hellos. While > 0, downstream frames belong to a dead
-   *  generation and resyncs answer pre-hello messages — both are ignored
-   *  (the channel is ordered; chaos reordering only delays convergence). */
-  private awaitingHello = 0;
+  /** Session GENERATION. `version` counts changesets within one generation
+   *  and resets on every hello, so a version alone cannot say WHICH
+   *  generation it belongs to — the epoch does, and the server echoes it on
+   *  helloOk/snapshot. Counting outstanding hellos instead (the first
+   *  attempt) breaks the moment one goes unanswered: a host that dies
+   *  mid-session leaves the counter permanently positive and the client
+   *  stuck "connecting" forever, even after it recovers. Identity, not
+   *  arithmetic. */
+  private epoch = 0;
+  /** The newest epoch the server has acknowledged (−1 = none yet). */
+  private liveEpoch = -1;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private queryId = 0;
   private readonly queries = new Map<
@@ -345,6 +365,7 @@ export class RemoteClient {
   constructor(transport: RemoteTransport, options: RemoteClientOptions = {}) {
     this.transport = transport;
     this.coalesceMs = options.coalesceMs ?? 15;
+    this.maxPendingChanges = Math.max(1, options.maxPendingChanges ?? 2000);
     transport.onMessage((msg) => this.receive(msg));
     // Channel torn + re-established (reconnect): frames may be lost in
     // both directions — the fresh hello supersedes all of it (I5).
@@ -354,13 +375,19 @@ export class RemoteClient {
   }
 
   get status(): RemoteStatus {
-    return this.dispatch && this.awaitingHello === 0 ? "live" : "connecting";
+    return this.dispatch && this.liveEpoch === this.epoch ? "live" : "connecting";
   }
 
   /** Local changesets the newest applied frame has not seen — 0 at
    *  quiescence; the UI's staleness affordance reads this. */
   get staleBy(): number {
     return this.appliedVersion < 0 ? this.version + 1 : this.version - this.appliedVersion;
+  }
+
+  /** Retained changesets: what the client must still be able to map frames
+   *  through. Bounded by maxPendingChanges; useful for diagnostics. */
+  get pendingChanges(): number {
+    return this.log.length;
   }
 
   /** The full live wiring: overlay store + snapshotOf override + EditorView
@@ -409,6 +436,16 @@ export class RemoteClient {
     this.doc = tr.newDoc;
     this.log.push(tr.changes);
     this.version++;
+    if (this.log.length > this.maxPendingChanges) {
+      // Frames stopped arriving but the socket never closed, so nothing has
+      // pruned the log. Retaining more buys nothing — the mapping tail is
+      // already longer than a fresh cold parse costs — so take the
+      // universal recovery move: hello with the full current text resets
+      // version, log and all (I5). Self-healing if the host comes back,
+      // harmless (one full text per cap-worth of edits) if it stays down.
+      this.hello();
+      return;
+    }
     if (this.coalesceMs === 0) this.flush();
     else if (this.flushTimer === null) {
       this.flushTimer = setTimeout(() => this.flush(), this.coalesceMs);
@@ -483,23 +520,26 @@ export class RemoteClient {
     this.version = 0;
     this.sentVersion = 0;
     this.appliedVersion = -1;
-    this.awaitingHello++;
+    this.epoch++;
     this.transport.send({
       type: "hello",
       protocolVersion: PROTOCOL_VERSION,
       docText: this.doc.toString(),
+      epoch: this.epoch,
     });
   }
 
   private receive(msg: ServerMessage): void {
     switch (msg.type) {
       case "helloOk":
-        if (this.awaitingHello > 0) this.awaitingHello--;
+        // Which hello does this answer? A host that omits the epoch (older
+        // build) is trusted to be answering the newest one.
+        this.liveEpoch = Math.max(this.liveEpoch, msg.epoch ?? this.epoch);
         return;
       case "ack":
         return; // liveness only in v1 — pruning happens on snapshot apply
       case "snapshot":
-        this.applyFrame(msg.version, msg.payload);
+        this.applyFrame(msg.version, msg.payload, msg.epoch);
         return;
       case "queryResult": {
         const pending = this.queries.get(msg.id);
@@ -545,15 +585,21 @@ export class RemoteClient {
         return;
       }
       case "resync":
-        // While a hello is outstanding this resync answers a message from
-        // before it (ordered channel) — the hello already supersedes it.
-        if (this.awaitingHello === 0) this.hello();
+        // Always answerable now: a superfluous hello (one already in
+        // flight) costs a full text and is harmless, because every frame
+        // is epoch-stamped — whereas SKIPPING one when the outstanding
+        // hello was lost would strand the session (the counter-era bug).
+        this.hello();
         return;
     }
   }
 
-  private applyFrame(version: number, payload: SnapshotPayload): void {
-    if (this.awaitingHello > 0) return; // dead generation
+  private applyFrame(version: number, payload: SnapshotPayload, epoch?: number): void {
+    // Dead generation: its version numbers index a log this client no
+    // longer has. Drop, never map. (An epoch-less host is trusted as
+    // current — its frames were the only ones that could arrive anyway.)
+    if ((epoch ?? this.epoch) !== this.epoch) return;
+    if (this.liveEpoch !== this.epoch) return; // frame precedes our helloOk
     if (version < this.appliedVersion) return; // I1 — never regress
     if (version < this.logBase || version > this.version) return; // unknowable
     const tail = this.log.slice(version - this.logBase);

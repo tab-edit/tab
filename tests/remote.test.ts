@@ -485,3 +485,102 @@ test("reconnect: a transport reset re-hellos and recovers edits lost while down"
   expect(ed.client.staleBy).toBe(0);
   expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
 });
+
+test("a silent server cannot grow the client's change log without bound", () => {
+  // The version counter cannot overflow (2^53 changesets ≈ 14M years of
+  // typing, reset by every hello). The LOG it indexes is the real resource:
+  // it prunes only when a snapshot is applied, so a host that stops
+  // answering WITHOUT the socket closing (half-open TCP, hung/evicted
+  // worker) would otherwise retain one changeset per keystroke forever.
+  const oracle = new OracleSession();
+  const inner = sessionTransport(oracle.handle);
+  let deaf = false;
+  let hellos = 0;
+  const dying: RemoteTransport = {
+    send: (msg) => {
+      if (msg.type === "hello") hellos++;
+      if (!deaf) inner.send(msg);
+    },
+    onMessage: (h) => inner.onMessage(h),
+  };
+  const editor = {
+    state: EditorState.create({ doc: DOC, extensions: [tablature(), remoteSemantics()] }),
+    client: new RemoteClient(dying, { coalesceMs: 0, maxPendingChanges: 8 }),
+  };
+  editor.client.start(editor.state, (effects) => {
+    editor.state = editor.state.update({
+      effects: effects as readonly StateEffect<unknown>[],
+    }).state;
+  });
+  expect(hellos).toBe(1);
+
+  deaf = true; // the host goes silent; the socket stays "open"
+  for (let i = 0; i < 60; i++) {
+    const tr = editor.state.update({ changes: { from: 0, insert: "x" } });
+    editor.state = tr.state;
+    editor.client.applyTransaction(tr);
+    expect(editor.client.pendingChanges).toBeLessThanOrEqual(8);
+  }
+  expect(hellos).toBeGreaterThan(1); // capped by re-hellos, not by luck
+
+  // …and when the host comes back, the next edit's hello restores service
+  // with the full current text (I5) — no lost characters.
+  deaf = false;
+  const tr = editor.state.update({ changes: { from: 0, insert: "z" } });
+  editor.state = tr.state;
+  editor.client.applyTransaction(tr);
+  expect(editor.client.status).toBe("live");
+  expect(editor.client.staleBy).toBe(0);
+  expect(snapshotOf(editor.state)).toEqual(localTruth(editor.state.doc.toString()));
+});
+
+test("a frame from a dead generation is DROPPED, not mapped (epoch)", () => {
+  // The oracle above omits epochs (the tolerant path). Here the server is
+  // hand-driven so it can do what a real host does — stamp frames — and,
+  // crucially, deliver one LATE from a generation the client has left.
+  let deliver: (msg: ServerMessage) => void = () => {};
+  const sent: { type: string; epoch?: number }[] = [];
+  const manual: RemoteTransport = {
+    send: (msg) => sent.push(msg as { type: string; epoch?: number }),
+    onMessage: (h) => {
+      deliver = h;
+    },
+  };
+  const editor = {
+    state: EditorState.create({ doc: DOC, extensions: [tablature(), remoteSemantics()] }),
+    client: new RemoteClient(manual, { coalesceMs: 0 }),
+  };
+  editor.client.start(editor.state, (effects) => {
+    editor.state = editor.state.update({
+      effects: effects as readonly StateEffect<unknown>[],
+    }).state;
+  });
+  const firstEpoch = sent[0].epoch!;
+  expect(firstEpoch).toBeGreaterThan(0);
+
+  // Generation 1 goes live with a real frame.
+  const truth = localTruth(DOC);
+  deliver({ type: "helloOk", protocolVersion: PROTOCOL_VERSION, version: 0, epoch: firstEpoch });
+  deliver({ type: "snapshot", version: 0, epoch: firstEpoch, payload: truth });
+  expect(editor.client.status).toBe("live");
+  expect(snapshotOf(editor.state)).toEqual(truth);
+
+  // The host says resync → the client hellos into generation 2.
+  deliver({ type: "resync", reason: "host restarted" });
+  const secondEpoch = sent[sent.length - 1].epoch!;
+  expect(secondEpoch).toBe(firstEpoch + 1);
+  expect(editor.client.status).toBe("connecting");
+
+  // A frame from generation 1 now arrives late. Its version (0) looks
+  // perfectly current — only the epoch reveals that it indexes a log this
+  // client threw away. It must not be applied.
+  const stale: SemanticSnapshot = { ...truth, sounds: [], measures: [], diagnostics: [] };
+  deliver({ type: "snapshot", version: 0, epoch: firstEpoch, payload: stale });
+  expect(snapshotOf(editor.state)).toEqual(truth); // untouched by the ghost
+
+  // Generation 2's own frame lands normally.
+  deliver({ type: "helloOk", protocolVersion: PROTOCOL_VERSION, version: 0, epoch: secondEpoch });
+  deliver({ type: "snapshot", version: 0, epoch: secondEpoch, payload: stale });
+  expect(editor.client.status).toBe("live");
+  expect(snapshotOf(editor.state)).toEqual(stale);
+});
