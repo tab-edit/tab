@@ -524,13 +524,15 @@ async function main(): Promise<void> {
   });
   // Unconditionally between mousedown and mouseup: a list that re-orders
   // between the two halves of a click is a click delivered to the wrong row.
-  window.addEventListener("pointerdown", () => {
+  // Registered only while the surface is ON — principle #14 says OFF means
+  // no listeners registered, not "registered but early-returning".
+  const onPointerDown = (): void => {
     pointerHeld = true;
-  });
-  window.addEventListener("pointerup", () => {
+  };
+  const onPointerUp = (): void => {
     pointerHeld = false;
     flushPendingPaint();
-  });
+  };
   /** The quiet moment after the pointer leaves or the button comes up: the
    *  surface catches up to whatever it deferred — and to the playhead, which
    *  may have moved a long way while you were reading. Unconditional rather
@@ -766,17 +768,20 @@ async function main(): Promise<void> {
       syntactic.push(n);
     }
     const syntaxLine = syntactic.map((n) => n.name).join(" ‹ ");
-    // DIVERGENCE: the grammar found something FINER than anything the engine
-    // built here — the technique-glyph-on-a-percussion-line case. One quiet
-    // marker, with the whole story on hover.
-    const deepestSemantic = chain[0]?.ranges[0];
-    const deepestSyntactic = syntactic[0];
-    const diverges =
-      deepestSemantic !== undefined &&
-      deepestSyntactic !== undefined &&
-      deepestSyntactic.to - deepestSyntactic.from < deepestSemantic.to - deepestSemantic.from &&
-      deepestSyntactic.from >= deepestSemantic.from &&
-      deepestSyntactic.to <= deepestSemantic.to;
+    // NO DIVERGENCE MARKER, and the reason is worth keeping. The case worth
+    // flagging is "the grammar recognised something the ENGINE DISCARDED"
+    // (an uppercase H on a percussion line parses as a technique and is
+    // refused). What the two data sources actually support is only "the
+    // grammar's innermost node is narrower than the engine's" — which is the
+    // ORDINARY case on dashes, dividers and line names, where the engine's
+    // finest granularity is simply coarser. A marker that fires on most of
+    // the document would say "the engine built nothing here" about text the
+    // engine reads perfectly well: principle #3 (when in doubt show nothing)
+    // and #9 (never imply more than the data supports). Telling the two
+    // apart needs a signal the wire does not carry — the host would have to
+    // report what the semantic layer REFUSED — so the comparison stays where
+    // it is honest: the grammar's full reading, on the deepest crumb's
+    // tooltip, available whenever anyone wants to check.
 
     const specs: RowSpec[] = chain.map((node, i) => ({
       // Keyed by DEPTH, not by name+range: walking down a tab line changes
@@ -803,17 +808,6 @@ async function main(): Promise<void> {
         elt.classList.toggle("dev-crumb-deep", i === 0);
       },
     }));
-    if (diverges) {
-      specs.push({
-        key: "diverge",
-        create: () => span("dev-diverge", "≠"),
-        update: (elt) => {
-          elt.title =
-            `the grammar reads ${deepestSyntactic.name} here (${deepestSyntactic.from}-${deepestSyntactic.to}); ` +
-            "the engine built no node for it. The prop layer is the truth — the parse tree is a hypothesis.";
-        },
-      });
-    }
     specs.push({
       key: "pos",
       create: () => span("dev-pos", ""),
@@ -2029,6 +2023,8 @@ async function main(): Promise<void> {
     devToggle.classList.toggle("active", on);
     writeStore("tab-edit:dev", on ? "1" : "0");
     if (on) {
+      window.addEventListener("pointerdown", onPointerDown);
+      window.addEventListener("pointerup", onPointerUp);
       setLens(lens);
       // Snapshot values are already on screen for the overlays, so THIS may
       // poll — cheaply, and only while the surface is open. It never touches
@@ -2057,6 +2053,14 @@ async function main(): Promise<void> {
         clearTimeout(refreshTimer);
         refreshTimer = null;
       }
+      if (flushTimer !== null) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      pointerHeld = false;
+      pointerInSurface = false;
       frame = null;
       activity = null;
       diffFrame = null;

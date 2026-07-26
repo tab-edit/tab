@@ -252,11 +252,6 @@ body {
   font-weight: 600;
 }
 
-.dev-diverge {
-  color: #d9a441;
-  cursor: help;
-}
-
 .dev-vocab {
   color: var(--text-dim);
   border: 1px dashed var(--border);
