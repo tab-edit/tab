@@ -57,6 +57,15 @@ src/client.ts       THE ENGINE-FREE ENTRY (@tab-edit/cm/client — exports
                     tests/client-bundle.test.ts (esbuild) AND
                     app/verify-app.cjs (real vite artifact). Careful even
                     with COMMENTS: audit markers match comment text.
+src/playback.ts     ENGINE-FREE playback: buildTimeline (wire values only —
+                    midiEvents + the snapshot SOUND MAP + doc geometry),
+                    the Web Audio synth (Stan's ear-tuned guitar body IR /
+                    pick knock — do NOT retune without his ears), windowed
+                    scheduler (pure cursorAt/schedulableThrough cores).
+                    demo/playback.ts is a local-sourcing shim over it.
+src/osmd.ts         sanitizeForOsmd — the VexFlow pre-flight shared by the
+                    demo and the app (drops what VexFlow throws on, reports
+                    the count). Engine-free, DOM-only.
 src/facade.ts       TabSemantics — the ONE app-facing interface; local
                     twin createLocalSemantics lives in index.ts. The
                     open-source flip = app/semantics-mode.ts re-export.
@@ -100,10 +109,17 @@ src/index.ts        tablature() — the whole system as one extension;
                     (default = local engine; RemoteClient overrides it —
                     every decoration/lint surface swaps origin at once)
 tests/adapter.test.ts  E2E on real CM machinery
-app/                THE PRODUCT PAGE (editor + wire semantics + OSMD sheet
-                    + import/export + samples): codes ONLY against the
-                    TabSemantics facade; semantics-mode.ts is the one-line
-                    local↔remote swap (both modes proven live 2026-07-18).
+app/                THE PRODUCT PAGE — FEATURE-COMPLETE over the wire
+                    (editor · sheet + tab/standard toggle · full transport
+                    with selection-aware playback, ⌖ follow moving BOTH the
+                    editor selection and the OSMD cursor · import/export ·
+                    samples): codes ONLY against the TabSemantics facade
+                    plus the engine-free /client helpers (createPlayer,
+                    snapshotOf, sanitizeForOsmd); semantics-mode.ts is the
+                    one-line local↔remote swap (both modes proven live).
+                    GOTCHA pinned by verify:app: function declarations
+                    hoist, their `let` state does not — the first
+                    renderSheet() ran before the cursor state existed.
                     Endpoint: ?remote= → VITE_REMOTE_URL → localhost
                     dev-server; worker endpoints mint anonymous tokens.
 demo/               the DEV vehicle (engine panes, inspector, playback) —
