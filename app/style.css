@@ -145,11 +145,14 @@ body {
 
 /* OSMD emits its playback cursor as an absolutely-positioned <img> at
    z-index:-1, which paints BEHIND this pane's white paper — correctly placed
-   and completely invisible. Lift it over the score; it is translucent, and
-   multiply keeps the notes readable through it. */
+   and completely invisible. Lift it over the score. NO BLEND MODE: the image
+   is already 50% alpha (measured: rgba green, A=128), so plain compositing
+   shows the notes through it just as well, and mix-blend-mode is exactly the
+   property whose z-index/compositing behaviour differs between engines —
+   Safari most of all. A fix nobody can see is not a fix. */
 .sheet-score img[id^="cursorImg"] {
   z-index: 1 !important;
-  mix-blend-mode: multiply;
+  opacity: 0.85;
 }
 
 .sheet-pane h2 {

@@ -108,6 +108,15 @@ async function main(): Promise<void> {
   // into them directly would hit the TDZ (the hoisting trap verify:app caught
   // once already).
   let onSelectionChanged: ((state: EditorState) => void) | null = null;
+  // Sheet-convergence bookkeeping, declared ABOVE the view because the update
+  // listener below touches it (same hoisting trap as the cursor state: the
+  // functions hoist, their `let`s do not). `docEdits` counts document changes;
+  // `sheetAt` is the count the RENDERED score reflects. "Live" is the
+  // invariant sheetAt === docEdits at rest, and renderSheet re-arms itself
+  // until that holds — never relying on a later edit to save it.
+  let docEdits = 0;
+  let sheetAt = -1;
+  let sheetRetries = 0;
 
   const view = new EditorView({
     doc: INITIAL_DOC,
@@ -134,6 +143,8 @@ async function main(): Promise<void> {
       editableCompartment.of(EditorView.editable.of(true)),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
+          docEdits++;
+          sheetRetries = 0; // a new document deserves a fresh retry budget
           scheduleSheet();
           // An edit invalidates the timeline's spans — stop cleanly rather
           // than play stale positions (same rule as the demo).
@@ -163,7 +174,14 @@ async function main(): Promise<void> {
     autoResize: true,
     backend: "svg",
     drawTitle: true,
-    followCursor: true,
+    // WE scroll the score pane (scrollSheetCursorIntoView below), not OSMD.
+    // Its own follow calls scrollIntoView({behavior:"smooth"}) on every
+    // cursor step: that walks every scrollable ANCESTOR (the page included)
+    // and restarts its animation on each call, so in a real browser the pane
+    // trails the music and the cursor leaves the viewport within seconds —
+    // present in the DOM, invisible to the user. Instant scrollTop math is
+    // deterministic, stays inside this pane, and the harness can assert it.
+    followCursor: false,
   });
   let sheetTimer: ReturnType<typeof setTimeout> | null = null;
   let sheetBusy = false;
@@ -172,38 +190,84 @@ async function main(): Promise<void> {
   // Cursor state lives HERE, above the first renderSheet() call: the
   // function declarations below hoist, their `let`s do not — the initial
   // render calling hideSheetCursor() hit the TDZ (found by verify:app).
+  // followPlayhead sits up here for the same reason: the sheet-cursor
+  // functions below read it, and they run from the very first render.
   let sheetCursorShown = false;
   let sheetCursorNextTs = -1;
+  let followPlayhead = true;
+  /** A query that never answers must never wedge the pane. A lost message —
+   *  the socket torn down with a request in flight — leaves a promise that
+   *  settles NEVER, and `sheetBusy` would stay latched: every later edit
+   *  reschedules, every reschedule sees "busy" and reschedules again, and the
+   *  sheet stops updating live for the rest of the session with no error
+   *  anywhere (reproduced: one swallowed query is enough). A deadline turns
+   *  that permanent wedge into an ordinary retry. */
+  const SHEET_QUERY_TIMEOUT_MS = 10_000;
+  const SHEET_MAX_RETRIES = 4;
+  function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error as Error);
+        }
+      );
+    });
+  }
   async function renderSheet(): Promise<void> {
     if (sheetBusy) {
       scheduleSheet();
       return;
     }
     sheetBusy = true;
+    const at = docEdits; // the document THIS render answers for
     hideSheetCursor();
+    let failed = false;
     try {
-      const xml = await semantics.musicXml(view.state);
+      const xml = await withDeadline(
+        semantics.musicXml(view.state),
+        SHEET_QUERY_TIMEOUT_MS,
+        "sheet query"
+      );
       // VexFlow is the strict oracle — the shared pre-flight (src/osmd.ts)
       // drops what it throws on and reports the count honestly.
       const { xml: renderable, removed } = sanitizeForOsmd(xml, sheetMode);
       await osmd.load(renderable);
       osmd.render();
       sheetLoaded = true;
+      sheetAt = at;
+      sheetRetries = 0;
       sheetStatus(removed > 0 ? `${removed} unrenderable measure(s)/note(s) skipped` : null);
+      showSheetCursorAtStart();
     } catch (e) {
+      failed = true;
       sheetLoaded = false;
       sheetStatus(`sheet: ${(e as Error).message}`);
     } finally {
       sheetBusy = false;
+      // CONVERGENCE IS THE INVARIANT: while the rendered score is behind the
+      // document, re-arm. A render that finished for an older document (the
+      // burst case) retries at once; a FAILED one backs off and is bounded,
+      // so a genuinely unrenderable document settles on its message instead
+      // of spinning — and any edit restores the budget.
+      if (sheetAt !== docEdits) {
+        if (!failed) scheduleSheet();
+        else if (sheetRetries < SHEET_MAX_RETRIES) scheduleSheet(700 * ++sheetRetries);
+      }
     }
   }
   function sheetStatus(message: string | null): void {
     sheetStatusEl.hidden = message === null;
     sheetStatusEl.textContent = message ?? "";
   }
-  function scheduleSheet(): void {
+  function scheduleSheet(delayMs = 400): void {
     if (sheetTimer !== null) clearTimeout(sheetTimer);
-    sheetTimer = setTimeout(() => void renderSheet(), 400);
+    sheetTimer = setTimeout(() => void renderSheet(), delayMs);
   }
   sheetModeButton.addEventListener("click", () => {
     sheetMode = sheetMode === "tab" ? "standard" : "tab";
@@ -331,6 +395,44 @@ async function main(): Promise<void> {
       // cursor DOM invalidated by a re-render — nothing to hide
     }
   }
+  /** Park the cursor on the first entry of a freshly rendered score. The
+   *  score used to show WHERE YOU ARE only while sound was coming out (the
+   *  cursor was hidden on stop and never shown at rest), so a user looking
+   *  for it before pressing ▶ found nothing at all — the first thing anyone
+   *  checks. A parked cursor also proves the thing exists and is on screen. */
+  function showSheetCursorAtStart(): void {
+    try {
+      osmd.cursor.reset();
+      osmd.cursor.show();
+      sheetCursorShown = true;
+      sheetCursorNextTs = -1;
+      // Deliberately NO scroll: parking the cursor happens after every
+      // re-render (i.e. after every edit) and after stop, and yanking the
+      // pane back to bar 1 each time would fight the user reading bar 40.
+      // Only the moving playhead scrolls.
+    } catch {
+      // an empty/degenerate score has no first entry — nothing to park on
+    }
+  }
+  /** Keep the cursor inside the visible band of the score pane. The pane is
+   *  the scroller (any real song is several times its height), so without
+   *  this the cursor walks out of view within seconds of ▶ — rendered
+   *  correctly, and invisible. Honours the ⌖ toggle: follow off means the
+   *  user is reading somewhere else and we must not yank the page. */
+  function scrollSheetCursorIntoView(): void {
+    if (!followPlayhead) return;
+    const img = sheetScoreEl.querySelector<HTMLElement>('img[id^="cursorImg"]');
+    if (!img) return;
+    const pane = sheetScoreEl.getBoundingClientRect();
+    const box = img.getBoundingClientRect();
+    if (box.height === 0) return;
+    const margin = Math.min(80, pane.height / 4);
+    if (box.top < pane.top + margin) {
+      sheetScoreEl.scrollTop -= pane.top + margin - box.top;
+    } else if (box.bottom > pane.bottom - margin) {
+      sheetScoreEl.scrollTop += box.bottom - (pane.bottom - margin);
+    }
+  }
   function followSheetCursor(target: number): void {
     if (!sheetLoaded) return;
     try {
@@ -345,6 +447,9 @@ async function main(): Promise<void> {
         c.reset(); // backward jump (scrub/restart)
         sheetCursorNextTs = -1;
       }
+      // Nothing to advance to yet. Scrolling is done ON ADVANCE only (below):
+      // measuring two rects every animation frame forces a layout per frame
+      // against a very large SVG, and the next note is never far away.
       if (target < sheetCursorNextTs) return;
       let advanced = false;
       while (!c.iterator.EndReached && c.iterator.currentTimeStamp.RealValue <= target + 1e-9) {
@@ -353,6 +458,7 @@ async function main(): Promise<void> {
       }
       sheetCursorNextTs = c.iterator.EndReached ? Infinity : c.iterator.currentTimeStamp.RealValue;
       if (advanced) c.previous(); // sit on the SOUNDING entry
+      scrollSheetCursorIntoView();
     } catch {
       hideSheetCursor(); // cursor drift must never break playback
     }
@@ -363,7 +469,8 @@ async function main(): Promise<void> {
   // this identical code path runs remote or local (src/playback.ts).
   let raf = 0;
   let lastSpanKey = "";
-  let followPlayhead = true;
+  // followPlayhead is declared with the sheet-cursor state above — the cursor
+  // functions read it, and they exist before this point.
   let playedToEnd = false;
   // The selection that SCOPED the current player, kept so the transport can
   // tell a user's selection from one the playhead wrote. Without it, follow
@@ -451,7 +558,9 @@ async function main(): Promise<void> {
     slider.value = "0";
     followButton.disabled = true;
     timeEl.textContent = "";
-    hideSheetCursor();
+    // Stop parks the cursor at the top of the score rather than hiding it —
+    // the sheet keeps showing a position at rest (see showSheetCursorAtStart).
+    showSheetCursorAtStart();
     setEditable(true);
   }
 
@@ -471,7 +580,16 @@ async function main(): Promise<void> {
       // PAUSED — the selection is live again, and it is the instruction:
       // unchanged means resume where we stopped, changed means the user picked
       // a new range (or cleared it), which is a new player, not a resume.
-      if (rangeSignature(view.state.selection.ranges) === scopeSignature) {
+      //
+      // "Unchanged" has TWO forms, and missing the second one is what made
+      // play → pause → play jump back to where the caret started (Stan,
+      // 2026-07-26): with follow on, the selection left on screen by a pause
+      // is the sounding span the PLAYHEAD wrote, not a choice the user made.
+      // Comparing it only against the scoping selection read "changed",
+      // rebuilt the player, and stopPlayback restored the play-start caret.
+      // A user selection is one that matches NEITHER.
+      const selectionNow = rangeSignature(view.state.selection.ranges);
+      if (selectionNow === scopeSignature || (lastSpanKey !== "" && selectionNow === lastSpanKey)) {
         player.resume();
         playButton.textContent = "⏸";
         setEditable(false);
@@ -547,8 +665,10 @@ async function main(): Promise<void> {
     followPlayhead = !followPlayhead;
     followButton.classList.toggle("active", followPlayhead);
     followButton.setAttribute("aria-pressed", String(followPlayhead));
-    osmd.FollowCursor = followPlayhead;
-    if (followPlayhead) jumpToPlayhead();
+    if (followPlayhead) {
+      jumpToPlayhead();
+      scrollSheetCursorIntoView(); // ⌖ back on: bring the score with it
+    }
   });
   timbrePicker.addEventListener("change", () => {
     if (player) stopPlayback(); // next ▶ builds with the new timbre

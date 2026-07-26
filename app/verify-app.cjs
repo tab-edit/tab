@@ -180,6 +180,45 @@ async function startVite() {
     );
     check(true, "sheet renders SVG from the wire musicXml");
 
+    // ——— the score cursor, measured the way a USER sees it ———
+    // COUNTING elements was the old check, and it is why "the cursor doesn't
+    // show" survived a green harness: OSMD's <img> exists whether or not a
+    // single pixel of it reaches the screen. These probes assert GEOMETRY —
+    // painted size, inside the scroll pane's visible box, and topmost at its
+    // own centre.
+    await page.evaluate(() => {
+      window.__cursorProbe = () => {
+        const pane = document.getElementById("sheet-score");
+        const img = pane.querySelector('img[id^="cursorImg"]');
+        if (!img) return { present: false };
+        const p = pane.getBoundingClientRect();
+        const r = img.getBoundingClientRect();
+        const style = getComputedStyle(img);
+        const painted =
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) > 0.1 &&
+          r.width > 0 &&
+          r.height > 0;
+        const inPane = r.top >= p.top - 1 && r.bottom <= p.bottom + 1;
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return {
+          present: true,
+          painted,
+          inPane,
+          topmost: top ? top.id || top.tagName : null,
+          rect: [Math.round(r.top), Math.round(r.height)],
+          scrollTop: Math.round(pane.scrollTop),
+        };
+      };
+    });
+    const visibleCursor = (c) =>
+      c.present && c.painted && c.inPane && String(c.topmost).startsWith("cursorImg");
+    // AT REST: the score shows a position before anything plays (it used to
+    // show one only while sound was coming out).
+    const restCursor = await page.evaluate(() => window.__cursorProbe());
+    check(visibleCursor(restCursor), `score cursor is visible at rest (${JSON.stringify(restCursor)})`);
+
     const xml = await page.evaluate(() => window.appSemantics.musicXml(window.view.state));
     check(
       typeof xml === "string" && xml.includes("<score-partwise"),
@@ -210,16 +249,71 @@ async function startVite() {
     // Follow-the-playhead moved the editor selection onto sounding text…
     const followed = await page.evaluate(() => !window.view.state.selection.main.empty);
     check(followed, "playhead follow selects the sounding sound");
-    // …and the notation cursor is on the score.
-    const cursorVisible = await page.evaluate(
-      () => document.querySelectorAll("#sheet-score img, #sheet-score .cursor").length > 0
+    // …and the notation cursor is on the score, VISIBLY.
+    await page.waitForTimeout(1_000);
+    const earlyCursor = await page.evaluate(() => window.__cursorProbe());
+    check(visibleCursor(earlyCursor), `sheet cursor visible 1s in (${JSON.stringify(earlyCursor)})`);
+    // …and STILL visible seconds later. The score is several pane-heights
+    // tall, so a cursor nobody scrolls to is off-screen within seconds — the
+    // exact regression a one-shot check at t≈0 cannot see. The pane must
+    // follow it (we scroll it ourselves; see app/main.ts).
+    await page.waitForTimeout(9_000);
+    const lateCursor = await page.evaluate(() => window.__cursorProbe());
+    check(
+      visibleCursor(lateCursor),
+      `sheet cursor still visible 10s in — the pane follows (${JSON.stringify(lateCursor)})`
     );
-    check(cursorVisible, "sheet cursor tracks the playhead");
+    check(
+      lateCursor.rect && earlyCursor.rect && lateCursor.rect[0] !== earlyCursor.rect[0],
+      "sheet cursor actually moved with the music"
+    );
+    // The pane must CHASE the cursor, not merely happen to contain it: scroll
+    // to the far end of the score and the next notes must bring it back.
+    await page.evaluate(() => {
+      const pane = document.getElementById("sheet-score");
+      pane.scrollTop = pane.scrollHeight;
+    });
+    let recovered = false;
+    try {
+      await page.waitForFunction(() => window.__cursorProbe().inPane, { timeout: 5_000 });
+      recovered = true;
+    } catch {}
+    check(recovered, "score pane scrolls the cursor back into view while playing");
+
+    // ——— pause → play is CONTIGUOUS (no jump back to the play-start caret) ———
+    const clock = () =>
+      page.evaluate(() => {
+        const [pos] = (document.getElementById("transport-time")?.textContent ?? "0:00 / 0:00")
+          .split(" / ");
+        const [m, s] = pos.split(":");
+        return Number(m) * 60 + Number(s);
+      });
     await page.click("#play"); // pause
     await page.waitForFunction(() => document.getElementById("play")?.textContent === "▶", {
       timeout: 5_000,
     });
     check(true, "⏸ pauses");
+    const pausedAt = await clock();
+    check(pausedAt > 0, `paused with the clock past the start (${pausedAt}s)`);
+    await page.waitForTimeout(1_000);
+    await page.click("#play"); // resume — nothing touched in between
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "⏸", {
+      timeout: 10_000,
+    });
+    await page.waitForTimeout(1_500);
+    const resumedAt = await clock();
+    // Follow writes the sounding span into the selection every frame, so the
+    // selection left on screen by a pause is the PLAYHEAD's, not the user's.
+    // Reading it as a user selection rebuilt the player and restarted from
+    // the play-start caret — play/pause/play must be contiguous.
+    check(
+      resumedAt >= pausedAt,
+      `▶ after ⏸ continues where it stopped (${pausedAt}s → ${resumedAt}s)`
+    );
+    await page.click("#play"); // pause again, leave the transport quiet
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "▶", {
+      timeout: 5_000,
+    });
     // Standard-notation toggle re-renders through the shared sanitizer.
     await page.click("#sheet-mode");
     await page.waitForFunction(
@@ -230,6 +324,69 @@ async function startVite() {
       timeout: 20_000,
     });
     check(true, "standard-notation toggle re-renders the score");
+
+    // ——— LIVE SHEET CONVERGENCE (the burst bug) ———
+    // The observable is the rendered title (drawTitle: true): type a marker
+    // into the Title directive and the score must end up carrying it.
+    const titleText = () =>
+      page.evaluate(
+        () =>
+          Array.from(document.querySelectorAll("#sheet-score svg text"))
+            .map((t) => t.textContent)
+            .find((t) => /Blackbird/.test(t)) ?? ""
+      );
+    const typeIntoTitle = async (text) => {
+      await page.evaluate(() => {
+        window.view.dispatch({ selection: { anchor: window.view.state.doc.line(1).to } });
+        window.view.focus();
+      });
+      await page.keyboard.type(text, { delay: 0 });
+    };
+    const awaitTitle = async (marker, timeout) => {
+      try {
+        await page.waitForFunction(
+          (m) =>
+            (Array.from(document.querySelectorAll("#sheet-score svg text"))
+              .map((t) => t.textContent)
+              .find((t) => /Blackbird/.test(t)) ?? "").includes(m),
+          marker,
+          { timeout }
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    await typeIntoTitle("BURSTMARK" + "q".repeat(60));
+    check(
+      await awaitTitle("BURSTMARK" + "q".repeat(60), 20_000),
+      `sheet converges after a 69-keystroke burst (${(await titleText()).slice(-16)})`
+    );
+
+    // A LOST answer must not end live updating. One swallowed reply — what a
+    // socket torn down mid-request produces — used to latch the pane's
+    // in-flight flag forever: every later edit rescheduled, every reschedule
+    // saw "busy", and the sheet never updated again for the rest of the
+    // session, silently. The pane must still converge.
+    await page.evaluate(() => {
+      const s = window.appSemantics;
+      const real = s.musicXml.bind(s);
+      let swallow = true;
+      s.musicXml = (state) => {
+        if (swallow) {
+          swallow = false;
+          return new Promise(() => {});
+        }
+        return real(state);
+      };
+    });
+    await typeIntoTitle("LOSTMARK");
+    await page.waitForTimeout(1_500);
+    await typeIntoTitle("HEALEDMARK");
+    check(
+      await awaitTitle("HEALEDMARK", 30_000),
+      "sheet still converges after an answer is LOST in flight"
+    );
 
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {

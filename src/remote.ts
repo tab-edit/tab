@@ -555,6 +555,13 @@ export class RemoteClient {
   /** The universal recovery move (I5): full text, version numbering
    *  restarts at 0. Everything in flight from the old generation is dead. */
   private hello(): void {
+    // Everything in flight belonged to the OLD generation. A query whose
+    // reply was lost with the channel would otherwise never settle — and a
+    // promise that never settles is worse than an error: the caller's
+    // "request in flight" latch stays closed forever (the product's sheet
+    // pane stopped updating live for the rest of the session that way).
+    // Failing them here is the honest answer, and retrying is always safe.
+    this.failPending("session restarted — retry");
     this.log = [];
     this.logBase = 0;
     this.version = 0;
@@ -567,6 +574,19 @@ export class RemoteClient {
       docText: this.doc.toString(),
       epoch: this.epoch,
     });
+  }
+
+  /** Reject every outstanding query/command. Called where their answers
+   *  become unreachable (a new generation); pending maps are cleared BEFORE
+   *  rejecting so a handler that immediately retries cannot be cut down by
+   *  this same sweep. */
+  private failPending(reason: string): void {
+    const queries = [...this.queries.values()];
+    const commands = [...this.commands.values()];
+    this.queries.clear();
+    this.commands.clear();
+    for (const p of queries) p.reject(new Error(reason));
+    for (const p of commands) p.reject(new Error(reason));
   }
 
   private receive(msg: ServerMessage): void {
