@@ -445,6 +445,7 @@ async function main(): Promise<void> {
         if (lens === "values" || lens === "cost" || watch.length > 0) await fetchInspection();
         await fetchActivity();
         paintDev();
+        rememberWatch();
       })();
     }, delayMs);
   }
@@ -598,11 +599,12 @@ async function main(): Promise<void> {
       const item = div("dev-watch-chip");
       item.appendChild(span("dev-watch-name", splitPropId(id).name, id));
       const text = row ? summarizeValue(row, 44) : "not at this node";
-      // A marked chip is one whose value MOVED since this strip last saw it —
-      // watching a prop across edits is the whole point of pinning one.
+      // A marked chip is one whose value MOVED since the last FRAME (not the
+      // last repaint — advancing it here would erase the marker on the next
+      // paint, half a second later, which is exactly the moment you are
+      // looking at it). rememberWatch() below advances it, once per frame.
       const seen = watchSeen.get(id);
       if (row && seen !== undefined && seen !== text) item.classList.add("changed");
-      if (row) watchSeen.set(id, text);
       item.appendChild(span(row ? "dev-watch-value" : "dev-watch-value dev-dim", text));
       if (row) item.appendChild(span(`dev-state dev-state-${row.state}`, "", row.state));
       item.appendChild(
@@ -624,6 +626,17 @@ async function main(): Promise<void> {
         });
       }
       devWatchEl.appendChild(item);
+    }
+  }
+
+  /** Advance the watch strip's memory — called once per arriving frame, so a
+   *  Δ marker survives until the value actually moves again. */
+  function rememberWatch(): void {
+    if (watch.length === 0) return;
+    const rows = currentRows();
+    for (const id of watch) {
+      const row = rows.find((r) => r.id === id);
+      if (row) watchSeen.set(id, summarizeValue(row, 44));
     }
   }
 
@@ -1357,8 +1370,17 @@ async function main(): Promise<void> {
       // Snapshot values are already on screen for the overlays, so THIS may
       // poll — cheaply, and only while the surface is open. It never touches
       // the rate-limited inspection queries.
+      // ONLY what the snapshot poll actually feeds: the diagnostics count and
+      // the Problems list. Repainting the VALUES lens here would rebuild its
+      // filter box under the user's fingers — type two characters, pause, and
+      // the third lands in a discarded input.
       snapshotTimer ??= setInterval(() => {
-        if (lens === "problems" || lens === "values") paintDev();
+        if (!devOn) return;
+        if (lens === "problems") paintProblems();
+        else {
+          const count = tabDiagnostics(view.state).length;
+          devDiagCountEl.textContent = count > 0 ? `(${count})` : "";
+        }
       }, 500);
       scheduleDevRefresh(0);
     } else {

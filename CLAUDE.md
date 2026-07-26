@@ -45,6 +45,15 @@ npm install                      # refresh COPIED @tab-edit/{ast,plugins,parse}
 ```
 src/language.ts     CmTabParser + tabLanguage + tabTree(state)  [wiring 2 core]
 src/state-layer.ts  TabHost: StateLayer sync, readTabProp, diagnostics,
+                    localInspectionFrame/localActivityFrame — the LOCAL
+                    TWIN of the host's producers, projected through the
+                    protocol's own choke point (mirror remote/host/src/
+                    inspect.ts VERBATIM where they could differ; internal
+                    props list OPAQUE, deps come sorted from
+                    registry.catalog(), exposure is checked BEFORE the
+                    evaluate policy). Local has no `hello`, so the savings
+                    baseline is measured on the first window with nothing
+                    to carry from and reads 0 = NOT MEASURED until then.
                     computeActivity (per-segment reuse status + compute-RUN
                     counts — the perf-diagnosis surface; call AFTER reads),
                     inspectNode (per-node prop values + explain chain +
@@ -69,6 +78,22 @@ src/osmd.ts         sanitizeForOsmd — the VexFlow pre-flight shared by the
 src/facade.ts       TabSemantics — the ONE app-facing interface; local
                     twin createLocalSemantics lives in index.ts. The
                     open-source flip = app/semantics-mode.ts re-export.
+                    Since 2026-07-26 it also carries INSPECTION:
+                    inspectNode/computeActivity answering @tab-edit/
+                    protocol frames. The remote impl FLUSHES then cites
+                    atVersion: client.version (RemoteClient.version is
+                    public) so frame ranges land in on-screen coordinates.
+src/inspector-model.ts  PURE view model over the two frames (rows, pack +
+                    OUTCOME chips, filters, cost-first ordering with an
+                    honest fallback, claim→outcome pairing, causeOf,
+                    savings line, value range extraction). Engine-free
+                    (frame TYPES only) → part of /client. It deliberately
+                    exposes NO segment geometry: per-segment reuse maps to
+                    no lever a plugin author owns and is the most
+                    mechanism-revealing thing in the frame, so no pane can
+                    draw it. tests/inspector-model.test.ts drives it with
+                    CONSTRUCTED frames (internal-opaque prop, a producer
+                    with no clock) that real data cannot produce.
 src/snapshot-model.ts  PURE half of semantics: value model + 0ms
                     resolvers + snapshotSource facet. Source selection is
                     PRECEDENCE-based: tablature() installs the local
@@ -109,7 +134,20 @@ src/index.ts        tablature() — the whole system as one extension;
                     (default = local engine; RemoteClient overrides it —
                     every decoration/lint surface swaps origin at once)
 tests/adapter.test.ts  E2E on real CM machinery
-app/                THE PRODUCT PAGE — FEATURE-COMPLETE over the wire
+app/                THE PRODUCT PAGE — FEATURE-COMPLETE over the wire,
+                    plus THE DEV SURFACE (2026-07-26): ONE master switch
+                    (#dev-toggle / ?dev=1 / ⌥D), four lenses over a
+                    permanent context bar — VALUES (claims as bid→outcome,
+                    prop rows, detail panel with the chain, the hedged
+                    "why it ran" and navigable deps), COST (savings
+                    headline + per-PROP runs/ms/reason; diff mode via
+                    sincePass), TREE (whole-document base tree, free —
+                    lazily rendered, path-keyed expansion), PROBLEMS.
+                    OFF COSTS NOTHING (no queries — they are rate-limited
+                    120/20s — no timers, no dev DOM), pinned by verify:app.
+                    First activity window is UNADDRESSED (an addressed
+                    sincePass:0 clamps past the cold pass); later ones name
+                    the previous passId.
                     (editor · sheet + tab/standard toggle · full transport
                     with selection-aware playback, ⌖ follow moving BOTH the
                     editor selection and the OSMD cursor · import/export ·
