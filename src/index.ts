@@ -78,6 +78,24 @@ export {
   remoteTablature,
   tablatureSupport,
 } from "./client.js";
+export { sanitizeForOsmd } from "./osmd.js";
+export type { SheetMode } from "./osmd.js";
+export {
+  buildTimeline,
+  createPlayer,
+  cursorAt,
+  schedulableThrough,
+  secToWholeNotes,
+} from "./playback.js";
+export type {
+  PlaybackProgress,
+  PlaybackRange,
+  PlaybackSource,
+  Player,
+  Span,
+  TimedEvent,
+  Timbre,
+} from "./playback.js";
 export type { RemoteSemantics, RemoteSemanticsOptions } from "./client.js";
 export type {
   MidiEvents,

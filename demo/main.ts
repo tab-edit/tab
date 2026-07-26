@@ -15,6 +15,7 @@ import { searchKeymap } from "@codemirror/search";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { SAMPLES } from "./samples.js";
+import { sanitizeForOsmd, type SheetMode } from "../src/osmd.js";
 import { createPlayer } from "./playback.js";
 import { Annotation, Compartment, EditorSelection, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
@@ -736,64 +737,10 @@ function sheetStatus(message: string | null): void {
   sheetStatusEl.textContent = message ?? "";
 }
 
-type SheetMode = "tab" | "standard";
 let sheetMode: SheetMode = "tab";
 
-/** Make the export OSMD-renderable.
- *
- *  TAB mode: misgrouped stray lines (grammar backlog #18/#19) export
- *  sections whose "instrument" has ONE course → <staff-lines>1</staff-lines>
- *  (VexFlow: "Invalid number of lines: 1") — drop those measures; and
- *  string numbers past the section's staff lines (mixed groupings) →
- *  VexFlow "Invalid note initialization object" — drop just the technical,
- *  the pitch still renders. Attributes persist across a section, so track
- *  the CURRENT staff-lines while walking each part.
- *
- *  STANDARD mode: TAB clefs become G clefs, staff-details (tab tunings) and
- *  technical string/fret go away — pitches are already in the export, so
- *  what remains is ordinary notation. Percussion clefs stay. */
-function sanitizeForOsmd(xmlText: string, mode: SheetMode): { xml: string; removed: number } {
-  const dom = new DOMParser().parseFromString(xmlText, "application/xml");
-  let removed = 0;
-  if (mode === "standard") {
-    for (const clef of [...dom.querySelectorAll("clef")]) {
-      const sign = clef.querySelector("sign");
-      if (sign?.textContent === "TAB") {
-        sign.textContent = "G";
-        const line = clef.querySelector("line");
-        if (line) line.textContent = "2";
-      }
-    }
-    for (const details of [...dom.querySelectorAll("staff-details")]) details.remove();
-    for (const technical of [...dom.querySelectorAll("technical")]) technical.remove();
-  } else {
-    for (const part of [...dom.querySelectorAll("part")]) {
-      let staffLines = 5;
-      for (const measure of [...part.querySelectorAll(":scope > measure")]) {
-        const declared = measure.querySelector("staff-lines");
-        if (declared) staffLines = Number(declared.textContent);
-        if (staffLines < 2) {
-          measure.remove();
-          removed++;
-          continue;
-        }
-        for (const technical of [...measure.querySelectorAll("technical")]) {
-          const string = Number(technical.querySelector("string")?.textContent ?? "1");
-          if (!(string >= 1 && string <= staffLines)) technical.remove();
-        }
-      }
-    }
-  }
-  // Zero-length notes are undrawable (dialect gaps — e.g. RTP colon-frets —
-  // can misparse sounds onto one column); VexFlow throws on them.
-  for (const note of [...dom.querySelectorAll("note")]) {
-    if (Number(note.querySelector("duration")?.textContent ?? "1") <= 0) {
-      note.remove();
-      removed++;
-    }
-  }
-  return { xml: new XMLSerializer().serializeToString(dom), removed };
-}
+// sanitizeForOsmd + SheetMode moved to the package (src/osmd.ts) so the
+// product app shares this pre-flight; imported at the top.
 
 async function renderSheet(tree: NonNullable<ReturnType<typeof tabTree>>): Promise<void> {
   if (tree === sheetTree) return;

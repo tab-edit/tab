@@ -7,7 +7,7 @@
 /// <reference types="vite/client" />
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { searchKeymap } from "@codemirror/search";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import {
   crosshairCursor,
   drawSelection,
@@ -20,6 +20,17 @@ import { minimalSetup } from "codemirror";
 import { OpenSheetMusicDisplay } from "opensheetmusicdisplay";
 import { SAMPLES } from "../demo/samples.js";
 import blackbird from "../demo/samples/blackbird.txt?raw";
+// Engine-free helpers (the /client surface both modes share — the FACTORY
+// is the only thing semantics-mode swaps).
+import {
+  createPlayer,
+  sanitizeForOsmd,
+  snapshotOf,
+  type Player,
+  type SheetMode,
+  type Span,
+  type Timbre,
+} from "@tab-edit/cm/client";
 import { createSemantics } from "./semantics-mode.js";
 
 const INITIAL_DOC = `Title: Blackbird — The Beatles\nTempo: 95\n\n${blackbird}`;
@@ -55,6 +66,19 @@ const editorEl = document.getElementById("editor") as HTMLElement;
 const sheetScoreEl = document.getElementById("sheet-score") as HTMLElement;
 const sheetStatusEl = document.getElementById("sheet-status") as HTMLElement;
 const statusEl = document.getElementById("remote-status") as HTMLElement;
+const playButton = document.getElementById("play") as HTMLButtonElement;
+const slider = document.getElementById("transport-slider") as HTMLInputElement;
+const timeEl = document.getElementById("transport-time") as HTMLElement;
+const followButton = document.getElementById("follow") as HTMLButtonElement;
+const timbrePicker = document.getElementById("timbre-picker") as HTMLSelectElement;
+const sheetModeButton = document.getElementById("sheet-mode") as HTMLButtonElement;
+
+// Read-only while the music plays (the playhead owns the selection then).
+const editableCompartment = new Compartment();
+const rangeSignature = (ranges: readonly { from: number; to: number }[]): string =>
+  ranges.map((r) => `${r.from}-${r.to}`).join(",");
+const fmt = (sec: number): string =>
+  `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}`;
 
 async function main(): Promise<void> {
   const url = await sessionUrl();
@@ -64,6 +88,7 @@ async function main(): Promise<void> {
     // construction (I3); semantic overlays wait for a host.
   }
   const semantics = createSemantics(url ?? "ws://localhost:8787");
+  let player: Player | null = null;
 
   const view = new EditorView({
     doc: INITIAL_DOC,
@@ -87,8 +112,14 @@ async function main(): Promise<void> {
         { dark: true }
       ),
       semantics.extension,
+      editableCompartment.of(EditorView.editable.of(true)),
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) scheduleSheet();
+        if (update.docChanged) {
+          scheduleSheet();
+          // An edit invalidates the timeline's spans — stop cleanly rather
+          // than play stale positions (same rule as the demo).
+          if (player) stopPlayback();
+        }
       }),
     ],
   });
@@ -112,32 +143,232 @@ async function main(): Promise<void> {
     autoResize: true,
     backend: "svg",
     drawTitle: true,
+    followCursor: true,
   });
   let sheetTimer: ReturnType<typeof setTimeout> | null = null;
   let sheetBusy = false;
+  let sheetLoaded = false;
+  let sheetMode: SheetMode = "tab";
+  // Cursor state lives HERE, above the first renderSheet() call: the
+  // function declarations below hoist, their `let`s do not — the initial
+  // render calling hideSheetCursor() hit the TDZ (found by verify:app).
+  let sheetCursorShown = false;
+  let sheetCursorNextTs = -1;
   async function renderSheet(): Promise<void> {
     if (sheetBusy) {
       scheduleSheet();
       return;
     }
     sheetBusy = true;
+    hideSheetCursor();
     try {
       const xml = await semantics.musicXml(view.state);
-      await osmd.load(xml);
+      // VexFlow is the strict oracle — the shared pre-flight (src/osmd.ts)
+      // drops what it throws on and reports the count honestly.
+      const { xml: renderable, removed } = sanitizeForOsmd(xml, sheetMode);
+      await osmd.load(renderable);
       osmd.render();
-      sheetStatusEl.hidden = true;
+      sheetLoaded = true;
+      sheetStatus(removed > 0 ? `${removed} unrenderable measure(s)/note(s) skipped` : null);
     } catch (e) {
-      sheetStatusEl.hidden = false;
-      sheetStatusEl.textContent = `sheet: ${(e as Error).message}`;
+      sheetLoaded = false;
+      sheetStatus(`sheet: ${(e as Error).message}`);
     } finally {
       sheetBusy = false;
     }
+  }
+  function sheetStatus(message: string | null): void {
+    sheetStatusEl.hidden = message === null;
+    sheetStatusEl.textContent = message ?? "";
   }
   function scheduleSheet(): void {
     if (sheetTimer !== null) clearTimeout(sheetTimer);
     sheetTimer = setTimeout(() => void renderSheet(), 400);
   }
+  sheetModeButton.addEventListener("click", () => {
+    sheetMode = sheetMode === "tab" ? "standard" : "tab";
+    sheetModeButton.textContent = sheetMode === "tab" ? "standard notation" : "tab notation";
+    void renderSheet();
+  });
   void renderSheet();
+
+  // ——— sheet playback cursor: notation follows the playhead through the
+  // TIME join (Player.scoreTimeAt and OSMD timestamps are both whole-note
+  // fractions over the SAME exported durations — arithmetic, not matching).
+  function hideSheetCursor(): void {
+    sheetCursorNextTs = -1;
+    if (!sheetCursorShown) return;
+    sheetCursorShown = false;
+    try {
+      osmd.cursor.hide();
+    } catch {
+      // cursor DOM invalidated by a re-render — nothing to hide
+    }
+  }
+  function followSheetCursor(target: number): void {
+    if (!sheetLoaded) return;
+    try {
+      const c = osmd.cursor;
+      if (!sheetCursorShown) {
+        c.reset();
+        c.show();
+        sheetCursorShown = true;
+        sheetCursorNextTs = -1;
+      }
+      if (c.iterator.currentTimeStamp.RealValue > target + 1e-6) {
+        c.reset(); // backward jump (scrub/restart)
+        sheetCursorNextTs = -1;
+      }
+      if (target < sheetCursorNextTs) return;
+      let advanced = false;
+      while (!c.iterator.EndReached && c.iterator.currentTimeStamp.RealValue <= target + 1e-9) {
+        c.next();
+        advanced = true;
+      }
+      sheetCursorNextTs = c.iterator.EndReached ? Infinity : c.iterator.currentTimeStamp.RealValue;
+      if (advanced) c.previous(); // sit on the SOUNDING entry
+    } catch {
+      hideSheetCursor(); // cursor drift must never break playback
+    }
+  }
+
+  // ——— transport: selection-aware playback with follow-the-playhead ———
+  // The data is two wire values (midiEvents + the snapshot sound map), so
+  // this identical code path runs remote or local (src/playback.ts).
+  let raf = 0;
+  let lastSpanKey = "";
+  let followPlayhead = true;
+  let playedToEnd = false;
+
+  const setEditable = (on: boolean): void => {
+    view.dispatch({ effects: editableCompartment.reconfigure(EditorView.editable.of(on)) });
+  };
+  const applySpans = (spans: readonly Span[]): void => {
+    view.dispatch({
+      selection: EditorSelection.create(
+        spans.map((s) => EditorSelection.range(s.from, s.to)),
+        0
+      ),
+      scrollIntoView: true,
+    });
+  };
+  const jumpToPlayhead = (): void => {
+    if (!player) return;
+    const p = player.progress();
+    if (!p.spans) return;
+    if (rangeSignature(view.state.selection.ranges) !== rangeSignature(p.spans)) {
+      applySpans(p.spans);
+    }
+  };
+  const tick = (): void => {
+    if (!player) return;
+    const p = player.progress();
+    slider.value = String(Math.round((p.sec / p.totalSec) * 1000));
+    timeEl.textContent = `${fmt(p.sec)} / ${fmt(p.totalSec)}`;
+    followSheetCursor(player.scoreTimeAt(p.sec));
+    if (followPlayhead && p.spans) {
+      const key = rangeSignature(p.spans);
+      if (key !== lastSpanKey) {
+        lastSpanKey = key;
+        applySpans(p.spans);
+      }
+    }
+    if (p.ended) {
+      playedToEnd = true;
+      stopPlayback();
+    } else {
+      raf = requestAnimationFrame(tick);
+    }
+  };
+
+  function stopPlayback(): void {
+    cancelAnimationFrame(raf);
+    player?.stop();
+    player = null;
+    playButton.textContent = "▶";
+    slider.disabled = true;
+    slider.value = "0";
+    followButton.disabled = true;
+    timeEl.textContent = "";
+    hideSheetCursor();
+    setEditable(true);
+  }
+
+  async function togglePlayback(): Promise<void> {
+    if (player) {
+      if (player.paused) {
+        player.resume();
+        playButton.textContent = "⏸";
+        setEditable(false);
+        raf = requestAnimationFrame(tick);
+      } else {
+        player.pause();
+        playButton.textContent = "▶";
+        setEditable(true);
+      }
+      return;
+    }
+    // ONE wire round trip per play (a query, never on the typing path);
+    // the sound map comes from the snapshot already on screen.
+    playButton.disabled = true;
+    let midi;
+    try {
+      midi = await semantics.midiEvents(view.state);
+    } catch (e) {
+      sheetStatus(`playback: ${(e as Error).message}`);
+      return;
+    } finally {
+      playButton.disabled = false;
+    }
+    player = createPlayer(
+      { midi, snapshot: snapshotOf(view.state), doc: view.state.doc },
+      view.state.selection.ranges,
+      timbrePicker.value as Timbre
+    );
+    if (!player) {
+      sheetStatus("playback: nothing playable here yet");
+      return;
+    }
+    // Play from HERE: a caret on/before a sound starts there; a non-empty
+    // selection instead scopes the whole timeline to itself.
+    if (!view.state.selection.ranges.some((r) => !r.empty) && !playedToEnd) {
+      const sec = player.secAt(view.state.selection.main.head);
+      if (sec !== undefined && sec > 0) player.seek(sec);
+    }
+    playedToEnd = false;
+    playButton.textContent = "⏸";
+    slider.disabled = false;
+    followButton.disabled = false;
+    lastSpanKey = "";
+    setEditable(false);
+    view.focus();
+    raf = requestAnimationFrame(tick);
+  }
+
+  playButton.addEventListener("click", () => void togglePlayback());
+  slider.addEventListener("input", () => {
+    if (!player) return;
+    player.seek((Number(slider.value) / 1000) * player.totalSec);
+    if (followPlayhead) jumpToPlayhead();
+  });
+  followButton.addEventListener("click", () => {
+    followPlayhead = !followPlayhead;
+    followButton.classList.toggle("active", followPlayhead);
+    followButton.setAttribute("aria-pressed", String(followPlayhead));
+    osmd.FollowCursor = followPlayhead;
+    if (followPlayhead) jumpToPlayhead();
+  });
+  timbrePicker.addEventListener("change", () => {
+    if (player) stopPlayback(); // next ▶ builds with the new timbre
+  });
+  window.addEventListener("keydown", (e) => {
+    // Space plays/pauses unless the user is typing in the editor.
+    if (e.code !== "Space" || view.hasFocus) return;
+    const target = e.target as HTMLElement | null;
+    if (target && ["INPUT", "SELECT", "TEXTAREA", "BUTTON"].includes(target.tagName)) return;
+    e.preventDefault();
+    void togglePlayback();
+  });
 
   // ——— samples ———
   const picker = document.getElementById("sample-picker") as HTMLSelectElement;

@@ -136,3 +136,74 @@ body {
   overflow: auto;
   background: #fff;
 }
+
+.sheet-pane h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.ghost.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.ghost:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sheet-pane h2 .ghost {
+  margin-left: auto;
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.transport #play {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 34px;
+  height: 28px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.transport #play:hover {
+  border-color: var(--accent);
+}
+
+.transport-time {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 92px;
+}
+
+.transport-slider {
+  flex: 1;
+  accent-color: var(--accent);
+}

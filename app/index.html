@@ -25,11 +25,35 @@
     <main class="layout">
       <section id="editor" class="pane editor-pane"></section>
       <aside class="pane sheet-pane">
-        <h2>Sheet <span class="pane-sub">the MusicXML export, rendered live</span></h2>
+        <h2>
+          Sheet <span class="pane-sub">the MusicXML export, rendered live</span>
+          <button id="sheet-mode" class="ghost" title="switch between tab and standard notation">
+            standard notation
+          </button>
+        </h2>
         <div id="sheet-status" class="sheet-status" hidden></div>
         <div id="sheet-score" class="sheet-score"></div>
       </aside>
     </main>
+    <footer class="transport">
+      <button id="play" title="play from the cursor — or just your selection (Space)">▶</button>
+      <span id="transport-time" class="transport-time"></span>
+      <input
+        id="transport-slider"
+        class="transport-slider"
+        type="range"
+        min="0"
+        max="1000"
+        value="0"
+        disabled
+      />
+      <button id="follow" class="ghost active" disabled aria-pressed="true">⌖ follow</button>
+      <select id="timbre-picker" class="sample-picker" title="playback sound for pitched notes">
+        <option value="plucked">plucked</option>
+        <option value="tone">tone</option>
+        <option value="soft">soft</option>
+      </select>
+    </footer>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

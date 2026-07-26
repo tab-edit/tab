@@ -154,6 +154,46 @@ async function startVite() {
     });
     check(midiHead === "MThd", `facade midiFile is an SMF (${JSON.stringify(midiHead)})`);
 
+    // ——— playback over the wire (the last engine-side feature) ———
+    const midi = await page.evaluate(() => window.appSemantics.midiEvents(window.view.state));
+    check(
+      midi.events.length > 0 && midi.bpm > 0 && midi.ppq > 0,
+      `midiEvents query feeds playback (${midi.events.length} events @ ${midi.bpm}bpm)`
+    );
+    await page.click("#play");
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "⏸", {
+      timeout: 15_000,
+    });
+    // The transport must actually ADVANCE (a real timeline, real clock).
+    await page.waitForFunction(
+      () => Number(document.getElementById("transport-slider")?.value ?? 0) > 0,
+      { timeout: 15_000 }
+    );
+    check(true, "▶ plays: transport advances from wire-fed events");
+    // Follow-the-playhead moved the editor selection onto sounding text…
+    const followed = await page.evaluate(() => !window.view.state.selection.main.empty);
+    check(followed, "playhead follow selects the sounding sound");
+    // …and the notation cursor is on the score.
+    const cursorVisible = await page.evaluate(
+      () => document.querySelectorAll("#sheet-score img, #sheet-score .cursor").length > 0
+    );
+    check(cursorVisible, "sheet cursor tracks the playhead");
+    await page.click("#play"); // pause
+    await page.waitForFunction(() => document.getElementById("play")?.textContent === "▶", {
+      timeout: 5_000,
+    });
+    check(true, "⏸ pauses");
+    // Standard-notation toggle re-renders through the shared sanitizer.
+    await page.click("#sheet-mode");
+    await page.waitForFunction(
+      () => document.getElementById("sheet-mode")?.textContent?.includes("tab notation"),
+      { timeout: 10_000 }
+    );
+    await page.waitForFunction(() => document.querySelectorAll("#sheet-score svg").length > 0, {
+      timeout: 20_000,
+    });
+    check(true, "standard-notation toggle re-renders the score");
+
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {
     await browser.close();
