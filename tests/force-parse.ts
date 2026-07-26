@@ -38,8 +38,12 @@ export function forceParsed(state: EditorState, timeout = 10_000): EditorState {
   const forced = ensureSyntaxTree(state, state.doc.length, timeout);
   expect(forced).not.toBeNull();
   const published = forced !== syntaxTree(state) ? state.update({}).state : state;
-  // The assertion that converts a silent wrong-value flake into a loud one.
-  expect(syntaxTree(published).length).toBe(published.doc.length);
+  // The assertion that converts a silent wrong-value flake into a loud one: the
+  // FIELD must now hold the tree we forced. Deliberately NOT
+  // `length === doc.length` — a complete parse's top node legitimately ends
+  // before EOF on some documents (yyz-bass parses fully to 16156 of 16506
+  // chars), so that form would fail on healthy input.
+  expect(syntaxTree(published)).toBe(forced);
   return published;
 }
 
