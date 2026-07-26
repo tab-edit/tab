@@ -13,7 +13,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false is LOAD-BEARING — checkout otherwise writes
+      # http.https://github.com/.extraheader (the repo-scoped Actions token)
+      # into .git/config, and an Authorization HEADER beats the credentials in
+      # the rewritten URL below. npm's clones would then authenticate as this
+      # repo's token, which cannot see the sibling private repos: the failure
+      # reads "Repository not found", indistinguishable from a bad PAT.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -46,7 +54,15 @@ jobs:
       # The deployed session host (ADR-003 M-R2) — baked into the client at build time.
       VITE_REMOTE_URL: wss://tab-edit-session-host.tab-edit.workers.dev/session
     steps:
+      # persist-credentials: false is LOAD-BEARING — checkout otherwise writes
+      # http.https://github.com/.extraheader (the repo-scoped Actions token)
+      # into .git/config, and an Authorization HEADER beats the credentials in
+      # the rewritten URL below. npm's clones would then authenticate as this
+      # repo's token, which cannot see the sibling private repos: the failure
+      # reads "Repository not found", indistinguishable from a bad PAT.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
