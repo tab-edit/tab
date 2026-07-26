@@ -7,8 +7,8 @@
 // convergence) is provable in-repo with a fast dev loop. The REAL-Session
 // differential lives in the remote repo (host/tests), enforcing lockstep
 // itself.
-import { ensureSyntaxTree } from "@codemirror/language";
 import { ChangeSet, EditorState, type StateEffect } from "@codemirror/state";
+import { forceParsed } from "./force-parse.js";
 import {
   docHash,
   parseClientMessage,
@@ -78,9 +78,7 @@ function mulberry32(seed: number): () => number {
 
 /** Force-parsed local state — the differential's ground truth. */
 function localState(doc: string): EditorState {
-  const state = EditorState.create({ doc, extensions: [tablature()] });
-  expect(ensureSyntaxTree(state, doc.length, 10_000)).not.toBeNull();
-  return state;
+  return forceParsed(EditorState.create({ doc, extensions: [tablature()] }));
 }
 
 function localTruth(doc: string): SemanticSnapshot {

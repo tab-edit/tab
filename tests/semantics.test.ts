@@ -3,7 +3,7 @@
 // prove the snapshot RESOLVERS answer cursor/selection questions identically
 // to the live tree queries — the in-process seed of ADR-003 I2 (convergence).
 // The caret sweep is exhaustive: every position in the document.
-import { ensureSyntaxTree } from "@codemirror/language";
+import { forceParsed } from "./force-parse.js";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import {
   computeSnapshot,
@@ -49,8 +49,7 @@ function stateOf(doc: string, selection?: EditorSelection): EditorState {
     ...(selection ? { selection } : {}),
     extensions: [tablature()],
   });
-  expect(ensureSyntaxTree(state, doc.length, 10_000)).not.toBeNull();
-  return state;
+  return forceParsed(state);
 }
 
 test("snapshot exists once the tree does, and is pure wire-ready data", () => {
@@ -128,8 +127,7 @@ test("snapshotOf rides the tree: cached by identity, fresh after an edit", () =>
   expect(snapshotOf(s2)).toBe(snapA);
   // A real edit inside the first system: new tree → new snapshot.
   const editAt = s1.doc.line(4).from + 4;
-  const s3 = s1.update({ changes: { from: editAt, to: editAt + 1, insert: "7" } }).state;
-  expect(ensureSyntaxTree(s3, s3.doc.length, 10_000)).not.toBeNull();
+  const s3 = forceParsed(s1.update({ changes: { from: editAt, to: editAt + 1, insert: "7" } }).state);
   const snapB = snapshotOf(s3)!;
   expect(snapB).not.toBe(snapA);
   expect(snapB).toEqual(computeSnapshot(s3));

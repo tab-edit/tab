@@ -3,7 +3,8 @@
 // This is ADR-001 Appendix A wiring 2 exercised as CM will exercise it:
 // one parse feeds CM's tree AND the semantic layer; edits flow through
 // CM's TreeFragments; state carries across transactions.
-import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import { syntaxTree } from "@codemirror/language";
+import { forceParsed } from "./force-parse.js";
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { measureNumber, noteSound } from "@tab-edit/plugins";
 import {
@@ -42,8 +43,7 @@ function stateOf(doc: string, selection?: EditorSelection): EditorState {
     ...(selection ? { selection } : {}),
     extensions: [tablature()],
   });
-  expect(ensureSyntaxTree(state, doc.length, 10_000)).not.toBeNull();
-  return state;
+  return forceParsed(state);
 }
 
 test("wiring 2: ONE parse serves both consumers — CM gets the base tree, tabTree rides it", () => {
@@ -74,8 +74,7 @@ test("edits flow through CM's fragments: untouched section's ARTIFACT survives b
   // legitimately blocks identity reuse; equality carry covers that case).
   const editAt = DOC.length - 100;
   const tr = s1.update({ changes: { from: editAt, to: editAt + 1, insert: "7" } });
-  const s2 = tr.state;
-  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  const s2 = forceParsed(tr.state);
   const after = tabTree(s2)!;
   expect(after).not.toBe(before);
   // Section 1's segment artifact is the SAME OBJECT — fragment-driven
@@ -113,8 +112,7 @@ test("lint with fixes: diagnostics surface as actions; applying the edits clears
     diags[0].to
   );
   expect(dispatched).not.toBeNull();
-  const s2 = s1.update(dispatched!).state;
-  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  const s2 = forceParsed(s1.update(dispatched!).state);
   expect(s2.doc.toString()).toMatch(/^e\|--3--\|\n[A-Za-z]\|-----\|\n$/);
   expect(tabDiagnostics(s2)).toEqual([]);
 });
@@ -134,8 +132,7 @@ test("computeActivity: work is attributed to the edited segment; carried segment
 
   // Edit DEEP in the LAST section, then pull the same reads again.
   const editAt = doc.length - 100;
-  const s2 = s1.update({ changes: { from: editAt, to: editAt + 1, insert: "5" } }).state;
-  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  const s2 = forceParsed(s1.update({ changes: { from: editAt, to: editAt + 1, insert: "5" } }).state);
   tabDiagnostics(s2);
   const report = computeActivity(s2)!;
 
@@ -266,8 +263,7 @@ test("MusicXML import command in the editor: musicXml → importMusicXml → the
   const s1 = stateOf(DOC);
   const xml = musicXml(s1);
   const edits = importMusicXml(s1, xml);
-  const s2 = s1.update({ changes: edits.map((e) => ({ ...e })) }).state;
-  expect(ensureSyntaxTree(s2, s2.doc.length, 10_000)).not.toBeNull();
+  const s2 = forceParsed(s1.update({ changes: edits.map((e) => ({ ...e })) }).state);
   const sections = tabTree(s2)!.topNode.getChildren("Section");
   // 2 source sections + 2 imported single-measure systems.
   expect(sections.length).toBe(4);
