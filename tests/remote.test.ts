@@ -10,6 +10,7 @@
 import { ensureSyntaxTree } from "@codemirror/language";
 import { ChangeSet, EditorState, type StateEffect } from "@codemirror/state";
 import {
+  docHash,
   parseClientMessage,
   PROTOCOL_VERSION,
   type ServerMessage,
@@ -136,8 +137,20 @@ class OracleSession {
           doc = set.apply(doc);
           this.version++;
         }
+        if (msg.toLength !== undefined && doc.length !== msg.toLength) {
+          return [{ type: "resync", reason: "applied length mismatch" }];
+        }
         this.state = localState(doc.toString()); // naive: cold parse
         return [{ type: "ack", version: this.version }, this.snapshot()];
+      }
+      case "verify": {
+        // Mirror of the real host: silence on agreement, resync on drift,
+        // and a hash at a version we've moved past is not divergence.
+        if (!this.state) return [{ type: "resync", reason: "no document" }];
+        if (msg.version !== this.version) return [];
+        return docHash(this.state.doc.toString()) === msg.hash
+          ? []
+          : [{ type: "resync", reason: "hash mismatch" }];
       }
       case "query": {
         if (!this.state) return [{ type: "queryError", id: msg.id, message: "no document" }];
@@ -583,4 +596,69 @@ test("a frame from a dead generation is DROPPED, not mapped (epoch)", () => {
   deliver({ type: "snapshot", version: 0, epoch: secondEpoch, payload: stale });
   expect(editor.client.status).toBe("live");
   expect(snapshotOf(editor.state)).toEqual(stale);
+});
+
+test("layer 2: an idle verify catches a silently corrupted mirror and heals it", () => {
+  // The failure no counter can see: both sides at the same version, same
+  // length, DIFFERENT text. Nothing in the message flow is wrong — only the
+  // documents disagree. Simulated by corrupting the server's mirror behind
+  // the protocol's back (an engine bug, or a client/host @codemirror/state
+  // skew — the thing layer 0 exists to prevent).
+  const oracle = new OracleSession();
+  const ed = remoteEditor(DOC, sessionTransport(oracle.handle));
+  expect(ed.client.status).toBe("live");
+
+  // Same length, one character different — invisible to every O(1) check.
+  const drifted = DOC.replace("Tempo: 120", "Tempo: 121");
+  expect(drifted.length).toBe(DOC.length);
+  oracle.state = localState(drifted);
+  expect(oracle.state.doc.toString()).not.toBe(ed.state.doc.toString());
+
+  ed.client.verify(); // what the idle timer fires
+  // The host answered resync; the client re-hellos with its full text, so
+  // the mirrors are identical again and the overlays are truthful.
+  expect(oracle.state.doc.toString()).toBe(ed.state.doc.toString());
+  expect(ed.client.status).toBe("live");
+  expect(snapshotOf(ed.state)).toEqual(localTruth(ed.state.doc.toString()));
+});
+
+test("layer 2: verify stays quiet when there is nothing to prove", () => {
+  const oracle = new OracleSession();
+  const sent: string[] = [];
+  const inner = sessionTransport(oracle.handle);
+  const spy: RemoteTransport = {
+    send: (msg) => {
+      sent.push(msg.type);
+      inner.send(msg);
+    },
+    onMessage: (h) => inner.onMessage(h),
+  };
+  // A huge coalescing window keeps edits UNSENT: hashing a version the host
+  // has never seen proves nothing, so verify must not fire.
+  const ed = remoteEditor(DOC, spy, 60_000);
+  ed.edit({ from: 0, insert: "x" });
+  ed.client.verify();
+  expect(sent).toEqual(["hello"]);
+  // Once flushed and quiescent, it has something to check.
+  ed.client.flush();
+  ed.client.verify();
+  expect(sent).toEqual(["hello", "updates", "verify"]);
+});
+
+test("layer 1: toLength travels on every flush", () => {
+  const oracle = new OracleSession();
+  const sent: { type: string; toLength?: number }[] = [];
+  const inner = sessionTransport(oracle.handle);
+  const spy: RemoteTransport = {
+    send: (msg) => {
+      sent.push(msg as { type: string; toLength?: number });
+      inner.send(msg);
+    },
+    onMessage: (h) => inner.onMessage(h),
+  };
+  const ed = remoteEditor(DOC, spy);
+  ed.edit({ from: 0, insert: "abc" });
+  const updates = sent.find((m) => m.type === "updates")!;
+  expect(updates.toLength).toBe(ed.state.doc.length);
+  expect(updates.toLength).toBe(DOC.length + 3);
 });

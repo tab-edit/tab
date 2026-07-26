@@ -27,6 +27,7 @@ import {
 } from "@codemirror/state";
 import { EditorView, ViewPlugin } from "@codemirror/view";
 import {
+  docHash,
   PROTOCOL_VERSION,
   type ClientMessage,
   type ServerMessage,
@@ -323,6 +324,12 @@ export interface RemoteClientOptions {
    *  keystroke forever. Capping it turns an unbounded leak into the
    *  protocol's ordinary recovery move (I5: resync is always safe). */
   readonly maxPendingChanges?: number;
+  /** Quiet period after which the client hashes its document and asks the
+   *  host to compare (ADR-003 §5.0 layer 2). Hashing is O(document) while
+   *  everything else on this path is O(edit), so it waits for a gap in the
+   *  typing rather than riding every message: divergence is a defect, not
+   *  an event, and finding it a second later costs nothing. 0 disables. */
+  readonly verifyIdleMs?: number;
 }
 
 export type RemoteStatus = "connecting" | "live";
@@ -331,6 +338,8 @@ export class RemoteClient {
   private readonly transport: RemoteTransport;
   private readonly coalesceMs: number;
   private readonly maxPendingChanges: number;
+  private readonly verifyIdleMs: number;
+  private verifyTimer: ReturnType<typeof setTimeout> | null = null;
   private dispatch: ((effects: readonly StateEffect<SemanticSnapshot>[]) => void) | null = null;
   private doc: Text = Text.empty;
   /** Changesets recorded since hello; log[i] takes version logBase+i to
@@ -366,6 +375,7 @@ export class RemoteClient {
     this.transport = transport;
     this.coalesceMs = options.coalesceMs ?? 15;
     this.maxPendingChanges = Math.max(1, options.maxPendingChanges ?? 2000);
+    this.verifyIdleMs = options.verifyIdleMs ?? 2000;
     transport.onMessage((msg) => this.receive(msg));
     // Channel torn + re-established (reconnect): frames may be lost in
     // both directions — the fresh hello supersedes all of it (I5).
@@ -464,8 +474,38 @@ export class RemoteClient {
       type: "updates",
       fromVersion: this.sentVersion,
       changes: this.log.slice(this.sentVersion - this.logBase).map((c) => c.toJSON()),
+      // Layer 1: what the document must LOOK LIKE after the host applies
+      // this. O(1) on both sides (the rope knows its length) and it checks
+      // the application RESULT, not just that the input fit.
+      toLength: this.doc.length,
     });
     this.sentVersion = this.version;
+    this.scheduleVerify();
+  }
+
+  /** Arm the idle integrity check; each new edit pushes it back, so it only
+   *  ever fires in a gap in the typing (see verifyIdleMs). */
+  private scheduleVerify(): void {
+    if (this.verifyIdleMs <= 0) return;
+    if (this.verifyTimer !== null) clearTimeout(this.verifyTimer);
+    this.verifyTimer = setTimeout(() => {
+      this.verifyTimer = null;
+      this.verify();
+    }, this.verifyIdleMs);
+  }
+
+  /** Hash the document and ask the host whether its mirror matches (the
+   *  host answers only on MISMATCH, with a resync). Skipped unless we are
+   *  live and quiescent: hashing a version the host hasn't applied yet
+   *  proves nothing. */
+  verify(): void {
+    if (this.liveEpoch !== this.epoch) return;
+    if (this.sentVersion !== this.version) return;
+    this.transport.send({
+      type: "verify",
+      version: this.version,
+      hash: docHash(this.doc.toString()),
+    });
   }
 
   /** Request/response over the wire (musicXml, midiFile, …). Never used on
