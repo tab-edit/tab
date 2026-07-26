@@ -30,7 +30,21 @@ export function tabDiagnostics(state: EditorState): CmDiagnostic[] {
   }));
 }
 
+export interface TabLintOptions {
+  /** Let the lint extension put its OWN tooltip over the text on hover
+   *  (default true). `tablatureSupport()` turns it off when hover
+   *  explanations are installed: those render the same diagnostics — with
+   *  the same fix buttons — inside ONE box that also carries what the glyph
+   *  was written as, and two boxes over one glyph is exactly the small
+   *  incoherence this product refuses. The GUTTER marker's tooltip reads a
+   *  separate config and is untouched. */
+  readonly textTooltips?: boolean;
+}
+
 /** The lint extension for `tablature()`. */
-export function tabLint(): Extension {
-  return linter((view) => tabDiagnostics(view.state));
+export function tabLint(options: TabLintOptions = {}): Extension {
+  return linter(
+    (view) => tabDiagnostics(view.state),
+    options.textTooltips === false ? { tooltipFilter: () => [] } : {}
+  );
 }

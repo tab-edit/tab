@@ -10,7 +10,8 @@ import { LanguageSupport } from "@codemirror/language";
 import type { EditorState, Extension } from "@codemirror/state";
 import { tablatureSupport, type TablatureOptions } from "./client.js";
 import { midiEvents, midiFile, musicXml, importMusicXml } from "./export.js";
-import type { TabSemantics } from "./facade.js";
+import type { InspectNodeParams, TabSemantics } from "./facade.js";
+import { inspectionSource } from "./hover.js";
 import { tabLanguage } from "./language.js";
 import { localSnapshotOf } from "./semantics.js";
 import { snapshotSource } from "./snapshot-model.js";
@@ -36,8 +37,17 @@ export function tablature(options: TablatureOptions = {}): Extension {
  *  (@tab-edit/cm/client); an app flips between them by swapping one
  *  re-export line (facade.ts contract). */
 export function createLocalSemantics(options: TablatureOptions = {}): TabSemantics {
+  // Built BEFORE the object literal so the hover's facet closes over the
+  // producer, never over a half-built facade.
+  const inspect = async (state: EditorState, params: InspectNodeParams) =>
+    localInspectionFrame(state, params) ?? {
+      version: 0,
+      pos: params.pos,
+      chain: [],
+      installWarnings: [],
+    };
   return {
-    extension: tablature(options),
+    extension: [tablature(options), inspectionSource.of(inspect)],
     musicXml: async (state: EditorState) => musicXml(state),
     midiFile: async (state: EditorState) => midiFile(state),
     midiEvents: async (state: EditorState) => midiEvents(state),
@@ -47,13 +57,7 @@ export function createLocalSemantics(options: TablatureOptions = {}): TabSemanti
     // same projectors, same panes. A null frame means the syntax tree has
     // not been produced yet (CM parses asynchronously); an empty frame is
     // the honest answer for a caller that cannot wait.
-    inspectNode: async (state: EditorState, params) =>
-      localInspectionFrame(state, params) ?? {
-        version: 0,
-        pos: params.pos,
-        chain: [],
-        installWarnings: [],
-      },
+    inspectNode: inspect,
     computeActivity: async (state: EditorState, params) =>
       localActivityFrame(state, params) ?? {
         version: 0,
@@ -95,6 +99,18 @@ export type {
   TraceStep,
 } from "./state-layer.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
+export type { TabLintOptions } from "./lint.js";
+export {
+  inspectionSource,
+  instantAt,
+  instantCopy,
+  pitchName,
+  refinedDetail,
+  tabHover,
+  voiceLabel,
+  worthRefining,
+} from "./hover.js";
+export type { HoverCopy, InspectionSource, InstantFacts } from "./hover.js";
 export {
   defaultDarkTabTheme,
   defaultLightTabTheme,

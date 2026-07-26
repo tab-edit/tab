@@ -31,6 +31,7 @@ import type {
   TextEditData,
 } from "./facade.js";
 import { tabHighlighting } from "./highlight.js";
+import { inspectionSource, tabHover } from "./hover.js";
 import { tabLint } from "./lint.js";
 import {
   RemoteClient,
@@ -62,13 +63,18 @@ export interface TablatureOptions {
   readonly theme?: Extension;
   /** Kind-driven line styling: prose/comments recede (default on). */
   readonly kindStyling?: boolean;
+  /** Hover (and Mod-i) explanations of what a glyph actually did — the
+   *  document explaining itself (default on; see hover.ts). */
+  readonly hover?: boolean;
 }
 
 /** The support extras every tablature editor gets — all SNAPSHOT-driven,
  *  shared verbatim between the fat tablature() and remoteTablature(). */
 export function tablatureSupport(options: TablatureOptions = {}): Extension[] {
   const extras: Extension[] = [];
-  if (options.lint !== false) extras.push(tabLint());
+  const hover = options.hover !== false;
+  if (options.lint !== false) extras.push(tabLint({ textTooltips: !hover }));
+  if (hover) extras.push(tabHover());
   if (options.theme) extras.push(options.theme);
   else if (options.tokenColors !== false) extras.push(tabHighlighting());
   if (options.highlightSounds !== false) extras.push(soundHighlight());
@@ -133,9 +139,24 @@ export function createRemoteSemantics(options: RemoteSemanticsOptions): RemoteSe
   const client = new RemoteClient(transport, {
     ...(options.coalesceMs !== undefined ? { coalesceMs: options.coalesceMs } : {}),
   });
+  // Built BEFORE the object literal so the hover's facet closes over the
+  // client, never over a half-built facade.
+  const inspect = (_state: unknown, params: InspectNodeParams): Promise<InspectionFrame> => {
+    client.flush();
+    return client.query("inspectNode", {
+      ...params,
+      atVersion: client.version,
+    }) as Promise<InspectionFrame>;
+  };
   return {
     client,
-    extension: [remoteTablature(options), client.extension],
+    extension: [
+      remoteTablature(options),
+      client.extension,
+      // Hover's Tier 2 over the wire — human-paced by construction (one
+      // pointer, a 300 ms delay), so it cannot outrun the query budget.
+      inspectionSource.of((state, params) => inspect(state, params)),
+    ],
     musicXml: () => client.query("musicXml") as Promise<string>,
     midiFile: async () => decodeBase64((await client.query("midiFile")) as string),
     midiEvents: () => client.query("midiEvents") as Promise<MidiEvents>,
@@ -154,13 +175,7 @@ export function createRemoteSemantics(options: RemoteSemanticsOptions): RemoteSe
     // `approximate` instead of quietly answering in stale coordinates.
     // Cost is one debounced flush on an explicitly-requested debug read —
     // never the typing path (I3 intact).
-    inspectNode: (_state, params) => {
-      client.flush();
-      return client.query("inspectNode", {
-        ...params,
-        atVersion: client.version,
-      }) as Promise<InspectionFrame>;
-    },
+    inspectNode: inspect,
     computeActivity: (_state, params) =>
       client.query("computeActivity", params) as Promise<ActivityFrame>,
   };
@@ -267,3 +282,15 @@ export {
 export { tabHighlighting, tabTheme, defaultDarkTabTheme, defaultLightTabTheme } from "./highlight.js";
 export type { TabThemeSpec } from "./highlight.js";
 export { tabDiagnostics, tabLint } from "./lint.js";
+export type { TabLintOptions } from "./lint.js";
+export {
+  inspectionSource,
+  instantAt,
+  instantCopy,
+  pitchName,
+  refinedDetail,
+  tabHover,
+  voiceLabel,
+  worthRefining,
+} from "./hover.js";
+export type { HoverCopy, InspectionSource, InstantFacts } from "./hover.js";
