@@ -388,6 +388,175 @@ async function startVite() {
       "sheet still converges after an answer is LOST in flight"
     );
 
+    // ——— THE DEV SURFACE ———
+    // Two claims: OFF costs nothing (no inspection queries leave the page,
+    // no dev DOM exists), and ON shows REAL values from the live host.
+    // The counters wrap the facade object the app itself holds, so they see
+    // every query the surface makes.
+    await page.evaluate(() => {
+      const s = window.appSemantics;
+      window.__devCalls = { inspect: 0, activity: 0 };
+      const inspect = s.inspectNode.bind(s);
+      const activity = s.computeActivity.bind(s);
+      s.inspectNode = (state, params) => {
+        window.__devCalls.inspect++;
+        return inspect(state, params);
+      };
+      s.computeActivity = (state, params) => {
+        window.__devCalls.activity++;
+        return activity(state, params);
+      };
+    });
+    const devHidden = await page.evaluate(() => document.getElementById("dev-drawer").hidden);
+    check(devHidden, "dev mode is OFF by default — the product page is two clean panes");
+    // Exercise the paths that WOULD fetch: a cursor move and an edit.
+    await page.evaluate(() => {
+      const at = window.view.state.doc.toString().indexOf("|-") + 3;
+      window.view.dispatch({ selection: { anchor: at } });
+      window.view.focus();
+    });
+    await page.keyboard.type("5");
+    await page.waitForTimeout(1_200);
+    const idle = await page.evaluate(() => ({
+      ...window.__devCalls,
+      devNodes: document.querySelectorAll(".dev-prop, .dev-tree-row, .dev-claim").length,
+    }));
+    check(
+      idle.inspect === 0 && idle.activity === 0,
+      `dev OFF spends NOTHING from the rate-limited bucket (${JSON.stringify(idle)})`
+    );
+    check(idle.devNodes === 0, "dev OFF renders no dev DOM at all");
+
+    await page.click("#dev-toggle");
+    await page.waitForFunction(() => document.querySelectorAll("#values-rows .dev-prop").length > 5, {
+      timeout: 15_000,
+    });
+    const values = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll("#values-rows .dev-prop")];
+      const withValue = rows.filter(
+        (r) => (r.querySelector(".dev-prop-value")?.textContent ?? "").length > 2
+      );
+      return {
+        rows: rows.length,
+        withValue: withValue.length,
+        packs: document.querySelectorAll("#values-toolbar .dev-chip").length,
+        claims: document.querySelectorAll("#values-claims .dev-claim").length,
+        stability: document.querySelectorAll("#values-rows .dev-stab").length,
+        sample: withValue[0]?.textContent?.slice(0, 60) ?? "",
+        cacheLine: document.getElementById("values-footer")?.textContent ?? "",
+        crumbs: document.querySelectorAll("#dev-breadcrumb .dev-crumb").length,
+      };
+    });
+    check(values.rows > 10, `VALUES lens renders real props at the cursor (${values.rows})`);
+    check(values.withValue > 5, `…with real VALUES (${values.withValue}): ${values.sample.trim()}`);
+    check(values.packs >= 4, `pack + outcome chips with counts (${values.packs})`);
+    check(values.claims > 0, `claims render as bid → outcome pairs (${values.claims})`);
+    check(values.stability > 0, `stability badges render (${values.stability})`);
+    check(/\d+\/\d+ props served from cache/.test(values.cacheLine), `cache ratio: ${values.cacheLine.slice(0, 40)}`);
+    check(values.crumbs > 1, `the context bar breadcrumb names the node chain (${values.crumbs})`);
+
+    // The prop DETAIL: chain, the causal walk, and the pin that survives lenses.
+    await page.locator("#values-rows .dev-prop").first().click();
+    await page.waitForSelector(".dev-detail");
+    const detail = (
+      await page.evaluate(() => document.querySelector(".dev-detail")?.textContent ?? "")
+    ).toLowerCase();
+    check(
+      detail.includes("chain") && detail.includes("why it ran") && detail.includes("reads"),
+      "prop detail carries provenance: the chain, why it ran, and its declared reads"
+    );
+    check(
+      /correlation, not a recorded cause|did not run in this window|none of its declared reads/.test(detail),
+      "the causal view is HEDGED — it says what also ran, not what caused it"
+    );
+    await page.locator(".dev-detail .dev-mini").first().click(); // pin
+    await page.click('.dev-lens[data-lens="tree"]');
+    const watched = await page.evaluate(
+      () => !document.getElementById("dev-watch").hidden &&
+        document.querySelectorAll("#dev-watch .dev-watch-chip").length
+    );
+    check(watched >= 1, `the watch strip survives a lens switch (${watched})`);
+
+    // TREE: the whole document, client-side (the free half).
+    const tree = await page.evaluate(() => ({
+      rows: document.querySelectorAll(".dev-tree-row").length,
+      atCursor: document.querySelectorAll(".dev-tree-row.at-cursor").length,
+      first: document.querySelector(".dev-tree-row")?.textContent ?? "",
+    }));
+    check(tree.rows > 20, `TREE lens renders the document tree (${tree.rows} rows visible)`);
+    check(tree.atCursor === 1, "the cursor's node is highlighted in the tree");
+    const before = await page.evaluate(() => window.view.state.selection.main.from);
+    await page.locator(".dev-tree-row").nth(3).click();
+    const after = await page.evaluate(() => ({
+      from: window.view.state.selection.main.from,
+      to: window.view.state.selection.main.to,
+    }));
+    check(after.to > after.from && after.from !== before, `clicking a tree node selects its range (${after.from}-${after.to})`);
+
+    // COST: after an edit, the savings figure and the per-prop table.
+    await page.click('.dev-lens[data-lens="cost"]');
+    await page.evaluate(() => {
+      const at = window.view.state.doc.toString().indexOf("|-") + 3;
+      window.view.dispatch({ selection: { anchor: at } });
+      window.view.focus();
+    });
+    await page.keyboard.type("7");
+    // Wait for an EDIT-ATTRIBUTED window. The first window a freshly opened
+    // surface sees spans everything since the session began (this driver has
+    // typed a 69-keystroke burst by now), which legitimately exceeds one cold
+    // boot — the savings counter refuses to call that a saving, so the
+    // check waits for the window that follows the keystroke above.
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#cost-body .dev-prop").length > 0 &&
+        /\d+ of \d+ recomputed/.test(document.getElementById("cost-headline")?.textContent ?? ""),
+      { timeout: 20_000 }
+    );
+    const cost = await page.evaluate(() => ({
+      headline: document.getElementById("cost-headline")?.textContent ?? "",
+      rows: document.querySelectorAll("#cost-body .dev-prop").length,
+      first: document.querySelector("#cost-body .dev-prop")?.textContent ?? "",
+      reasons: document.querySelectorAll("#cost-body .dev-reason").length,
+      links: document.querySelectorAll("#cost-body .dev-link").length,
+      bar: document.getElementById("dev-savings")?.textContent ?? "",
+      segments: document.querySelectorAll("#cost-body .dev-segment").length,
+    }));
+    check(
+      /\d+ of \d+ recomputed · \d+ carried · [\d.]+ ms/.test(cost.headline),
+      `the SAVINGS line is real: ${cost.headline.split("window")[0].trim()}`
+    );
+    check(/\d+ of \d+ recomputed/.test(cost.bar), "the savings figure is in the context bar too");
+    check(cost.rows > 3, `COST lens lists per-prop work (${cost.rows} props): ${cost.first.replace(/\s+/g, " ").slice(0, 50)}`);
+    check(cost.reasons > 0, `recompute reasons render (${cost.reasons})`);
+    check(cost.links > 0, `the causal walk is navigable from the cost table (${cost.links} links)`);
+    check(cost.segments === 0, "no per-segment geometry is rendered (engine machinery stays invisible)");
+
+    // PROBLEMS, then OFF again: the page must come back to exactly product.
+    await page.click('.dev-lens[data-lens="problems"]');
+    const problems = await page.evaluate(
+      () => document.getElementById("dev-diagnostics")?.textContent ?? ""
+    );
+    check(problems.length > 0, `PROBLEMS lens renders (${problems.replace(/\s+/g, " ").slice(0, 46)})`);
+    const callsBefore = await page.evaluate(() => ({ ...window.__devCalls }));
+    await page.click("#dev-toggle");
+    await page.evaluate(() => {
+      const at = window.view.state.doc.toString().indexOf("|-") + 3;
+      window.view.dispatch({ selection: { anchor: at } });
+      window.view.focus();
+    });
+    await page.keyboard.type("9");
+    await page.waitForTimeout(1_200);
+    const off = await page.evaluate(() => ({
+      hidden: document.getElementById("dev-drawer").hidden,
+      devNodes: document.querySelectorAll(".dev-prop, .dev-tree-row").length,
+      calls: { ...window.__devCalls },
+    }));
+    check(off.hidden && off.devNodes === 0, "turning dev OFF returns the page to the product exactly");
+    check(
+      off.calls.inspect === callsBefore.inspect && off.calls.activity === callsBefore.activity,
+      `…and stops every query (${off.calls.inspect}/${off.calls.activity} unchanged)`
+    );
+
     check(errors.length === 0, `no console/page errors (got: ${errors.join(" | ") || "none"})`);
   } finally {
     await browser.close();

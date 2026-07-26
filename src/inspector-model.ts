@@ -20,7 +20,6 @@ import type {
   PropInspectionJSON,
   PropTimingJSON,
   RecomputeReason,
-  SegmentActivityJSON,
 } from "@tab-edit/protocol";
 
 /** "pluginId/propName" → the two parts, split on the FIRST slash only:
@@ -38,7 +37,11 @@ export function splitPropId(id: string): { pack: string; name: string } {
  *  - `carried` — served from cache: reading it did no work at all. */
 export type PropState = "deferred" | "cold" | "recomputed" | "carried";
 
-export type PropStability = "stable" | "experimental" | "unknown";
+/** The wire's own closed vocabulary. ABSENT reads as `experimental`, which
+ *  is what the projector resolves it to as well — so an old host and a new
+ *  client cannot disagree, and the disagreement they cannot have would have
+ *  been in the over-promising direction. */
+export type PropStability = "stable" | "experimental";
 
 export interface PropRow {
   readonly id: string;
@@ -118,17 +121,17 @@ export function indexActivity(frame?: ActivityFrame | null): ActivityIndex {
   };
 }
 
-/** Optional exposure axes: the protocol gained `stability`/`internal` after
- *  the first frames shipped, so consume them if present and degrade to
- *  "unknown"/false if not — an older host must not break a pane. */
+/** The axes as an OLDER host might omit them: absence is not an error, it
+ *  is the under-promising default (see PropStability). */
 interface ExposureFields {
   readonly stability?: string;
   readonly internal?: boolean;
 }
 
 function stabilityOf(prop: PropInspectionJSON): PropStability {
-  const declared = (prop as PropInspectionJSON & ExposureFields).stability;
-  return declared === "stable" || declared === "experimental" ? declared : "unknown";
+  return (prop as PropInspectionJSON & ExposureFields).stability === "stable"
+    ? "stable"
+    : "experimental";
 }
 
 function stateOf(prop: PropInspectionJSON, reason?: RecomputeReason): PropState {
@@ -364,39 +367,75 @@ export function savingsLine(frame?: ActivityFrame | null): SavingsLine {
   };
 }
 
-// ─── The document IS the heatmap ─────────────────────────────────────────
+// ─── WHY a prop ran: the causal view, honestly labelled ──────────────────
 
-export type TintKind = "changed" | "equal" | "state";
-
-export interface RecomputeTint {
-  readonly from: number;
-  readonly to: number;
-  readonly kind: TintKind;
+export interface CauseEdge {
+  readonly propId: string;
+  readonly runs: number;
+  readonly selfMs: number;
+  readonly reason?: RecomputeReason;
 }
 
-/** The blast radius of the last pass, as ranges to tint IN THE DOCUMENT:
- *  `changed` = re-parsed over different content, `equal` = re-parsed to an
- *  identical result (real work the cutoff absorbed), `state` = parse
- *  carried but values recomputed. Segments that did nothing produce
- *  nothing — the visible gap IS the incrementality. */
-export function recomputeTints(frame?: ActivityFrame | null): RecomputeTint[] {
-  if (!frame) return [];
-  const tints: RecomputeTint[] = [];
-  for (const s of frame.segments) {
-    const kind: TintKind | null =
-      s.reuse === "changed"
-        ? "changed"
-        : s.reuse === "recomputed-equal"
-          ? "equal"
-          : s.recomputes.length > 0
-            ? "state"
-            : null;
-    if (kind && s.to > s.from) tints.push({ from: s.from, to: s.to, kind });
-  }
-  return tints;
+export interface CauseView {
+  /** How the upstream set was obtained.
+   *
+   *  `correlated` — the declared reads that ALSO ran in this window. It is
+   *  an intersection of outcome data, not a recorded cause: the engine keeps
+   *  recompute records, not a per-read causal trace, and `RecomputeReason`
+   *  itself is derived the same way. Say so in the UI: a false causal claim
+   *  in a debugger is worse than a hedged true one.
+   *
+   *  Reserved: `recorded`, for when the engine can name the read that
+   *  actually triggered the run. The shape is deliberately identical so the
+   *  same display upgrades in place — only the label changes. */
+  readonly kind: "correlated";
+  readonly reason?: RecomputeReason;
+  /** Declared reads of this prop that also ran in the window. */
+  readonly upstream: readonly CauseEdge[];
+  /** Props (visible in this frame) that read this one and also ran — the
+   *  other direction of the same walk: what MY recompute cost downstream. */
+  readonly downstream: readonly CauseEdge[];
+}
+
+/** The chain a plugin author walks to answer "why did my prop rerun?" —
+ *  upstream to the declared read that moved, downstream to what moved
+ *  because of it. Both directions are navigable because both are edges of
+ *  the public declared-read graph. */
+export function causeOf(row: PropRow, activity: ActivityIndex): CauseView {
+  const edge = (propId: string): CauseEdge | null => {
+    const runs = activity.runsByProp.get(propId);
+    if (!runs) return null;
+    return {
+      propId,
+      runs: runs.runs,
+      selfMs: activity.timingByProp.get(propId)?.selfMs ?? 0,
+      reason: runs.reason,
+    };
+  };
+  const collect = (ids: readonly string[]): CauseEdge[] =>
+    ids
+      .map(edge)
+      .filter((e): e is CauseEdge => e !== null)
+      .sort((a, b) => b.selfMs - a.selfMs || b.runs - a.runs || a.propId.localeCompare(b.propId));
+  return {
+    kind: "correlated",
+    ...(row.reason ? { reason: row.reason } : {}),
+    upstream: collect(row.deps),
+    downstream: collect(row.dependents),
+  };
 }
 
 // ─── The COST lens's window table ────────────────────────────────────────
+//
+// PROP GRANULARITY ONLY, deliberately. A plugin author's performance levers
+// are compute cost, `on:` selector breadth, declared-read volatility and
+// `stableWhenEqual` quality — all per prop. Per-SEGMENT reuse maps to none
+// of them (segment boundaries are engine machinery ADR-002 keeps invisible
+// to plugin code, and no plugin can influence them), so it is at once the
+// least actionable and the most mechanism-revealing thing in the frame.
+// `ActivityFrame.segments` is therefore read for its per-prop RUNS and
+// never for its geometry — this module exposes no segment ranges at all, so
+// no pane can accidentally draw where the engine cuts the document.
 
 export interface CostRow {
   readonly propId: string;
@@ -429,18 +468,6 @@ export function costRows(frame?: ActivityFrame | null): CostRow[] {
       };
     })
     .sort((a, b) => b.selfMs - a.selfMs || b.runs - a.runs || a.propId.localeCompare(b.propId));
-}
-
-export interface SegmentRow extends SegmentActivityJSON {
-  readonly runs: number;
-}
-
-/** Segments with their run totals, worst first — where the work landed. */
-export function segmentRows(frame?: ActivityFrame | null): SegmentRow[] {
-  if (!frame) return [];
-  return frame.segments
-    .map((s) => ({ ...s, runs: s.recomputes.reduce((n, r) => n + r.runs, 0) }))
-    .sort((a, b) => b.runs - a.runs || a.from - b.from);
 }
 
 // ─── Values are structured data, not strings ─────────────────────────────

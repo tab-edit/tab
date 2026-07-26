@@ -191,15 +191,6 @@ export function deepestNodeAt(tree: TabTree, pos: number): TabNode {
   }
 }
 
-/** The two exposure axes ride along as EXCESS fields on the raw shape: the
- *  projector names every field it emits, so they reach a frame only once
- *  the protocol package carries them. Feeding them now means the local twin
- *  gains the badges the moment that lands, with no change here. */
-interface LocalRawProp extends RawPropInspection {
-  readonly stability?: string;
-  readonly internal?: boolean;
-}
-
 /** How many passes of segment observations to retain — MATCHED to the
  *  layer's own recompute-log window (measured: it keeps passId-16…passId),
  *  so a clamped window can never pair a reuse baseline with run counts from
@@ -436,17 +427,42 @@ class TabHost {
       this.layer.changesSince({ id: 0 }).changed.get(propId)?.length ?? 0;
     const pos = Math.max(0, Math.min(Math.round(params.pos), state.doc.length));
 
+    // The catalog is the METADATA view (id, sorted deps, the two exposure
+    // axes): the same source the host projects from, so the two twins agree
+    // element-wise and not merely set-wise.
+    const catalog = new Map(registry.catalog().map((entry) => [entry.id, entry]));
+
     const chain: RawNodeInspection[] = [];
     let index = 0;
     for (let node: TabNode | null = deepestNodeAt(tree, pos); node; node = node.parent, index++) {
       const isRoot = node.parent === null;
-      const props: LocalRawProp[] = [];
+      const props: RawPropInspection[] = [];
       for (const prop of registry.props) {
-        if (prop.internal) continue;
         if (!prop.selectors.some((sel) => node!.type.is(sel))) continue;
+        const meta = catalog.get(prop.id);
         const declared = registry.explain(prop.id);
-        const deps = [...prop.deps];
-        const exposure = { stability: prop.stability, internal: prop.internal };
+        const deps = [...(meta?.deps ?? prop.deps)];
+        const exposure = {
+          stability: meta?.stability ?? prop.stability,
+          internal: meta?.internal ?? prop.internal,
+        };
+        // INTERNAL PROPS ARE OPAQUE, NOT ABSENT: an inspector that hides
+        // them draws a dependency graph with holes. Position and outcome
+        // ship, content never does — and this check comes BEFORE the
+        // "is it wanted" policy so an `only` request cannot name an
+        // internal prop into being read.
+        if (exposure.internal) {
+          props.push({
+            id: prop.id,
+            chain: declared,
+            deps,
+            ...exposure,
+            evaluated: false,
+            computed: false,
+            trace: [],
+          });
+          continue;
+        }
         const wanted = params.only
           ? params.only.nodeIndex === index && params.only.propIds.includes(prop.id)
           : !isRoot || params.evaluateRoot === true;
@@ -602,15 +618,28 @@ class TabHost {
     // additionally get the richer trace).
     const runsNow = (propId: string): number =>
       this.layer.changesSince({ id: 0 }).changed.get(propId)?.length ?? 0;
+    const catalog = new Map(registry.catalog().map((entry) => [entry.id, entry]));
     const props: PropInspection[] = [];
     for (const prop of registry.props) {
-      if (prop.internal) continue;
       if (!prop.selectors.some((sel) => node.type.is(sel))) continue;
       const chain = registry.explain(prop.id);
-      // The EFFECTIVE union across the chain (InstalledProp.deps), the same
-      // expression the session host projects — lockstep beats cleverness.
-      const deps = [...prop.deps];
-      const exposure = { deps, stability: prop.stability, internal: prop.internal };
+      // Metadata from the CATALOG: the effective union of declared reads,
+      // sorted, plus the two exposure axes — the same source the session
+      // host projects from, so the twins agree element-wise.
+      const meta = catalog.get(prop.id);
+      const deps = [...(meta?.deps ?? prop.deps)];
+      const exposure = {
+        deps,
+        stability: meta?.stability ?? prop.stability,
+        internal: meta?.internal ?? prop.internal,
+      };
+      // Internal props are listed OPAQUE (position and outcome, never
+      // content), and the exposure check precedes the evaluate policy so an
+      // id allowlist can never read one.
+      if (exposure.internal) {
+        props.push({ id: prop.id, chain, ...exposure, evaluated: false, computed: false, trace: [] });
+        continue;
+      }
       const wanted = evaluate === true || (evaluate !== false && evaluate.includes(prop.id));
       if (!wanted) {
         props.push({ id: prop.id, chain, ...exposure, evaluated: false, computed: false, trace: [] });

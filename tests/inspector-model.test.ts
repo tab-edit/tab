@@ -6,6 +6,7 @@
 
 import {
   buildRows,
+  causeOf,
   claimPairs,
   costRows,
   filterRows,
@@ -14,9 +15,7 @@ import {
   outcomeNameFor,
   packChips,
   rangesInValue,
-  recomputeTints,
   savingsLine,
-  segmentRows,
   splitPropId,
   stateChips,
   summarizeValue,
@@ -38,6 +37,8 @@ function prop(
     computed: false,
     trace: [],
     value: 1,
+    stability: "experimental",
+    internal: false,
     ...extra,
   } as InspectionFrame["chain"][number]["props"][number];
 }
@@ -147,8 +148,12 @@ test("rows carry pack, node, cache state, cost and BOTH directions of the dep gr
   expect(rows.find((r) => r.id === "export-musicxml/documentXml")!.state).toBe("deferred");
   expect(rows.every((r) => r.stability !== undefined)).toBe(true);
   expect(noteSound.stability).toBe("stable");
-  // A frame from a host that predates the exposure axes still renders.
-  expect(rows.find((r) => r.id === "core-taxonomy/lineRoles")!.stability).toBe("unknown");
+  // Absence (an older host) reads as the under-promising default, which is
+  // exactly what the projector resolves it to — the two cannot disagree.
+  expect(
+    buildRows(frame([{ name: "X", from: 0, to: 1, props: [{ ...prop("p/q"), stability: undefined }] }]))[0]
+      .stability
+  ).toBe("experimental");
 });
 
 test("a cold reason outranks the per-read label: `cold` is its own state", () => {
@@ -287,7 +292,7 @@ test("the savings line is the demonstration — and it refuses to overclaim", ()
   expect(overshoot.headline).toContain("120 recomputed");
 });
 
-test("cost and segment tables answer 'where did the work land'", () => {
+test("the cost table is PER PROP — the model exposes no segment geometry", () => {
   const cost = costRows(ACTIVITY);
   expect(cost.map((c) => c.propId)).toEqual([
     "core-time/noteDuration",
@@ -295,27 +300,38 @@ test("cost and segment tables answer 'where did the work land'", () => {
     "core-aggregates/documentInstruments",
   ]);
   expect(cost[0].runs).toBe(4);
+  // Runs are summed ACROSS segments: the geometry is used and discarded.
+  expect(cost[1].runs).toBe(3);
   // A prop that ran but has no timing still appears, at zero cost.
   expect(cost[2].selfMs).toBe(0);
   expect(cost[2].reason).toBe("structure-changed");
-
-  const segments = segmentRows(ACTIVITY);
-  expect(segments[0].from).toBe(0); // 6 runs, the worst
-  expect(segments.map((s) => s.runs)).toEqual([6, 1, 0]);
+  // Nothing a pane could draw a segment boundary from leaves this module —
+  // segment ranges map to no lever a plugin author owns, and they are the
+  // most mechanism-revealing thing in the frame.
+  expect(JSON.stringify(cost)).not.toContain('"from"');
 });
 
-test("the document IS the heatmap: only segments that did work produce tints", () => {
-  expect(recomputeTints(ACTIVITY)).toEqual([
-    { from: 0, to: 20, kind: "changed" },
-    { from: 40, to: 60, kind: "state" },
-  ]);
-  expect(recomputeTints(null)).toEqual([]);
-  expect(
-    recomputeTints({
-      ...ACTIVITY,
-      segments: [{ from: 0, to: 9, reuse: "recomputed-equal", recomputes: [] }],
-    })
-  ).toEqual([{ from: 0, to: 9, kind: "equal" }]);
+test("WHY it ran: the declared reads that also ran, both directions, hedged", () => {
+  const rows = buildRows(FRAME, indexActivity(ACTIVITY));
+  const index = indexActivity(ACTIVITY);
+  const noteSound = causeOf(rows.find((r) => r.id === "core-pitch/noteSound")!, index);
+  // The upstream set is an INTERSECTION of outcome data, and the `kind`
+  // says so — the UI must not word it as a recorded cause.
+  expect(noteSound.kind).toBe("correlated");
+  expect(noteSound.reason).toBe("text-changed");
+  expect(noteSound.upstream).toEqual([]); // lineRoles did not run this window
+
+  const withUpstream = causeOf(
+    { ...rows[0], deps: ["core-time/noteDuration"], reason: "dependency-recomputed" },
+    index
+  );
+  expect(withUpstream.upstream.map((e) => e.propId)).toEqual(["core-time/noteDuration"]);
+  expect(withUpstream.upstream[0].runs).toBe(4);
+  expect(withUpstream.upstream[0].selfMs).toBeCloseTo(0.2);
+
+  // The other direction: what ran BECAUSE of me (as far as the frame sees).
+  const lineRoles = causeOf(rows.find((r) => r.id === "core-taxonomy/lineRoles")!, index);
+  expect(lineRoles.downstream.map((e) => e.propId)).toEqual(["core-pitch/noteSound"]);
 });
 
 test("values: ranges inside them are findable, and long ones truncate honestly", () => {

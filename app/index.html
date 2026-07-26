@@ -42,30 +42,60 @@
         </h2>
         <div id="sheet-status" class="sheet-status" hidden></div>
         <div id="sheet-score" class="sheet-score"></div>
-        <!-- Dev drawer: everything here is WIRE data (snapshot values), so it
-             costs the audited bundle nothing. Hidden by default — the clean
-             two-pane page is the product; this is for when you want to see
-             what the engine decided. -->
-        <div id="dev-drawer" class="dev-drawer" hidden>
-          <details open>
-            <summary>At cursor</summary>
-            <div id="dev-cursor" class="dev-body"></div>
-          </details>
-          <details>
-            <summary>Diagnostics <span id="dev-diag-count" class="dev-count"></span></summary>
-            <div id="dev-diagnostics" class="dev-body"></div>
-          </details>
-          <details>
-            <summary>Syntax at cursor</summary>
-            <div id="dev-tree" class="dev-body"></div>
-          </details>
-          <details>
-            <summary>Snapshot</summary>
-            <div id="dev-snapshot" class="dev-body"></div>
-          </details>
-        </div>
       </aside>
     </main>
+    <!-- THE DEV SURFACE — one master switch (#dev-toggle / ?dev=1), off by
+         default: the product page is two clean panes until someone asks for
+         more. Organised by QUESTION, not by data structure: four lenses, one
+         at a time, over a permanent context bar. Nothing here runs, renders
+         or queries while the switch is off. -->
+    <section id="dev-drawer" class="dev-drawer" hidden aria-label="developer surface">
+      <div id="dev-resize" class="dev-resize" title="drag to resize"></div>
+      <div class="dev-bar">
+        <div id="dev-breadcrumb" class="dev-breadcrumb" title="the node chain at the cursor — click to select a node's range"></div>
+        <div
+          id="dev-savings"
+          class="dev-savings"
+          title="what the last window actually cost, against this document's own cold boot"
+        ></div>
+        <div class="dev-lenses" role="tablist" aria-label="lenses">
+          <button class="dev-lens" data-lens="values" role="tab" aria-selected="true" title="what the engine decided here (⌥1)">Values</button>
+          <button class="dev-lens" data-lens="cost" role="tab" aria-selected="false" title="what the work cost (⌥2)">Cost</button>
+          <button class="dev-lens" data-lens="tree" role="tab" aria-selected="false" title="the document tree (⌥3)">Tree</button>
+          <button class="dev-lens" data-lens="problems" role="tab" aria-selected="false" title="diagnostics (⌥4)">
+            Problems <span id="dev-diag-count" class="dev-count"></span>
+          </button>
+        </div>
+        <button id="dev-refresh" class="ghost" title="re-read at the cursor (⌥R)">↻</button>
+      </div>
+      <div id="dev-watch" class="dev-watch" hidden></div>
+
+      <div id="lens-values" class="dev-lens-body">
+        <div id="values-toolbar" class="dev-toolbar"></div>
+        <div id="values-teach" class="dev-teach" hidden></div>
+        <div id="values-claims" class="dev-claims"></div>
+        <div id="values-rows" class="dev-rows"></div>
+        <div id="values-footer" class="dev-footer"></div>
+      </div>
+
+      <div id="lens-cost" class="dev-lens-body" hidden>
+        <div id="cost-toolbar" class="dev-toolbar"></div>
+        <div id="cost-teach" class="dev-teach" hidden></div>
+        <div id="cost-headline" class="dev-headline"></div>
+        <div id="cost-body" class="dev-rows"></div>
+      </div>
+
+      <div id="lens-tree" class="dev-lens-body" hidden>
+        <div id="tree-toolbar" class="dev-toolbar"></div>
+        <div id="tree-teach" class="dev-teach" hidden></div>
+        <div id="tree-body" class="dev-tree"></div>
+      </div>
+
+      <div id="lens-problems" class="dev-lens-body" hidden>
+        <div id="problems-teach" class="dev-teach" hidden></div>
+        <div id="dev-diagnostics" class="dev-rows"></div>
+      </div>
+    </section>
     <footer class="transport">
       <button id="play" title="play from the cursor — or just your selection (Space)">▶</button>
       <span id="transport-time" class="transport-time"></span>

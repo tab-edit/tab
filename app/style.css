@@ -13,6 +13,14 @@
   box-sizing: border-box;
 }
 
+/* `hidden` must WIN over a display rule — the dev surface toggles panels
+   with the attribute, and a `display: flex` on the class silently defeats
+   it (four "hidden" lens bodies each still claiming a quarter of the
+   drawer: found by screenshotting the thing). */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   height: 100%;
@@ -174,61 +182,276 @@ body {
   display: none;
 }
 
-/* ——— dev drawer: snapshot values, off by default ——— */
+/* ——— THE DEV SURFACE: full-width bottom drawer, off by default ———
+   One master switch; four lenses, one at a time; a context bar that never
+   moves. Sized so the whole thing is usable at a third of the window width:
+   chrome wraps, values truncate, nothing scrolls sideways. */
 .dev-drawer {
+  position: relative;
+  height: 38vh;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid var(--border);
   background: var(--bg-raised);
-  max-height: 45%;
-  overflow: auto;
   font-size: 11px;
 }
 
-.dev-drawer summary {
-  padding: 6px 14px;
-  cursor: pointer;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-dim);
+.dev-resize {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+.dev-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 5px 12px;
   border-bottom: 1px solid var(--border);
 }
 
-.dev-drawer summary:hover {
-  color: var(--text);
+.dev-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
-.dev-body {
-  padding: 8px 14px;
-  font-family: ui-monospace, "SF Mono", Consolas, monospace;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.dev-count {
-  font-weight: 400;
-  text-transform: none;
-  letter-spacing: 0;
-}
-
-.dev-row {
-  display: block;
-  width: 100%;
-  text-align: left;
+.dev-crumb {
   background: transparent;
   border: 0;
-  border-bottom: 1px solid var(--border);
-  padding: 5px 14px;
-  color: inherit;
+  padding: 1px 3px;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.dev-crumb:hover {
+  color: var(--text);
+  background: rgba(91, 157, 250, 0.16);
+}
+
+.dev-crumb::after {
+  content: " ‹";
+  opacity: 0.4;
+}
+
+.dev-crumb:last-of-type::after {
+  content: "";
+}
+
+.dev-crumb-deep {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dev-pos {
+  color: var(--text-dim);
+  opacity: 0.7;
+  margin-left: 4px;
+}
+
+.dev-savings {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.dev-savings-figure {
+  color: #8fd18f;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dev-savings-figure.dev-dim {
+  color: var(--text-dim);
+}
+
+.dev-lenses {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.dev-lens {
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  padding: 3px 9px;
+  color: var(--text-dim);
   font: inherit;
   cursor: pointer;
 }
 
-.dev-row:hover {
+.dev-lens:hover {
+  color: var(--text);
+}
+
+.dev-lens.active {
+  background: rgba(91, 157, 250, 0.18);
+  color: var(--text);
+}
+
+.dev-watch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(91, 157, 250, 0.05);
+}
+
+.dev-watch-label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+.dev-watch-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.dev-watch-chip.changed {
+  border-color: #d9a441;
+}
+
+.dev-watch-chip.changed .dev-watch-name::before {
+  content: "Δ ";
+  color: #d9a441;
+}
+
+.dev-watch-name {
+  color: var(--text);
+}
+
+.dev-watch-value {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
+
+.dev-watch-x,
+.dev-teach-x {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 2px;
+}
+
+.dev-lens-body {
+  flex: 1;
+  min-height: 0;
+  /* A plain block scroller: the toolbar sticks, everything else stacks in
+     document order. (As a flex column the footer overlapped the last row —
+     also found by looking at it.) */
+  display: block;
+  overflow: auto;
+}
+
+.dev-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-raised);
+  z-index: 1;
+}
+
+.dev-chip {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 8px;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dev-chip:hover {
+  color: var(--text);
+}
+
+.dev-chip.active {
+  border-color: var(--accent);
+  color: var(--text);
   background: rgba(91, 157, 250, 0.14);
 }
 
-.dev-key {
+.dev-filter,
+.dev-select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  font: inherit;
+  padding: 2px 6px;
+}
+
+.dev-filter {
+  min-width: 120px;
+  flex: 1;
+  max-width: 220px;
+}
+
+.dev-mini {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-dim);
+  font: inherit;
+  padding: 1px 7px;
+  cursor: pointer;
+}
+
+.dev-mini:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.dev-teach {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 12px;
+  color: var(--text-dim);
+  background: rgba(91, 157, 250, 0.06);
+  border-bottom: 1px solid var(--border);
+  line-height: 1.5;
+}
+
+.dev-sep {
+  color: var(--border);
+}
+
+.dev-dim {
   color: var(--text-dim);
 }
 
@@ -237,6 +460,375 @@ body {
 }
 
 .dev-warning {
+  color: #f0c674;
+}
+
+.dev-empty {
+  padding: 14px 12px;
+  color: var(--text-dim);
+}
+
+.dev-section-title {
+  display: block;
+  padding: 7px 12px 3px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+
+/* claims: bid → outcome, the negotiation made visible */
+.dev-claim {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+.dev-claim:hover {
+  background: rgba(91, 157, 250, 0.1);
+}
+
+.dev-claim-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dev-claim-outcome {
+  color: #8fd18f;
+}
+
+.dev-claim-arrow {
+  color: var(--text-dim);
+}
+
+.dev-claim-bids {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.dev-bid {
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 0 7px;
+  color: var(--text-dim);
+}
+
+.dev-bid.won {
+  border-style: solid;
+  border-color: #8fd18f;
+  color: #8fd18f;
+}
+
+/* prop rows */
+.dev-rows {
+  min-height: 0;
+}
+
+.dev-node-header {
+  padding: 6px 12px 2px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+}
+
+.dev-prop {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 2px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.dev-prop:hover {
+  background: rgba(91, 157, 250, 0.1);
+}
+
+.dev-prop.selected {
+  background: rgba(91, 157, 250, 0.16);
+}
+
+.dev-prop-name {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.dev-prop-pack,
+.dev-prop-node {
+  color: var(--text-dim);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.dev-prop-node {
+  margin-left: auto;
+}
+
+.dev-prop-value {
+  color: #b9c4d2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.dev-cost,
+.dev-cost-runs,
+.dev-cost-ms {
+  color: #d9a441;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dev-cost-runs {
+  min-width: 3.5ch;
+  text-align: right;
+}
+
+.dev-cost-ms {
+  min-width: 8ch;
+}
+
+/* the per-prop cache outcome, as a dot: this is the thing you scan for */
+.dev-state {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.dev-state-carried {
+  background: #4f6d52;
+}
+
+.dev-state-recomputed {
+  background: #d9a441;
+}
+
+.dev-state-cold {
+  background: #c96565;
+}
+
+.dev-state-deferred {
+  background: var(--border);
+}
+
+.dev-stab {
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.dev-stab-stable {
+  border-color: #4f6d52;
+  color: #8fd18f;
+}
+
+.dev-stab-internal {
+  border-color: #7a5f8a;
+  color: #c9a4d8;
+}
+
+/* the detail panel, in place under its row */
+.dev-detail {
+  padding: 8px 12px 10px 26px;
+  border-left: 2px solid var(--accent);
+  background: rgba(91, 157, 250, 0.06);
+}
+
+.dev-detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.dev-detail-id {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dev-detail-block {
+  margin: 5px 0;
+  min-width: 0;
+}
+
+.dev-detail-label {
+  display: block;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+
+.dev-mono {
+  color: #b9c4d2;
+  word-break: break-word;
+}
+
+.dev-cause,
+.dev-deps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.dev-link {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px dotted var(--accent);
+  color: var(--accent);
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+
+.dev-reason {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 6px;
+  color: #d9a441;
+  white-space: nowrap;
+}
+
+.dev-value {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: #b9c4d2;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dev-headline {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dev-headline-figure {
+  font-size: 15px;
+  color: #8fd18f;
+  font-variant-numeric: tabular-nums;
+}
+
+.dev-headline-figure.dev-dim {
+  color: var(--text-dim);
+}
+
+.dev-footer {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+/* the tree */
+.dev-tree {
+  padding-bottom: 8px;
+}
+
+.dev-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 1px 12px 1px 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dev-tree-row:hover {
+  background: rgba(91, 157, 250, 0.1);
+}
+
+.dev-tree-row.at-cursor {
+  background: rgba(91, 157, 250, 0.2);
+}
+
+.dev-caret {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  cursor: pointer;
+  width: 12px;
+  padding: 0;
+}
+
+.dev-tree-name {
+  color: var(--text);
+}
+
+.dev-tree-range {
+  color: var(--text-dim);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.dev-tree-text {
+  color: #6f7a88;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* problems */
+.dev-problem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.dev-problem:hover {
+  background: rgba(91, 157, 250, 0.1);
+}
+
+.dev-problem-msg {
+  color: var(--text);
+  flex: 1;
+  min-width: 0;
+}
+
+.dev-sev {
+  border-radius: 8px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+.dev-sev-error {
+  border-color: #c96565;
+  color: #ff8080;
+}
+
+.dev-sev-warning {
+  border-color: #d9a441;
   color: #f0c674;
 }
 

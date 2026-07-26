@@ -143,6 +143,7 @@ export type {
 export {
   buildRows,
   claimPairs,
+  causeOf,
   costRows,
   filterRows,
   indexActivity,
@@ -150,15 +151,15 @@ export {
   outcomeNameFor,
   packChips,
   rangesInValue,
-  recomputeTints,
   savingsLine,
-  segmentRows,
   splitPropId,
   stateChips,
   summarizeValue,
 } from "./inspector-model.js";
 export type {
   ActivityIndex,
+  CauseEdge,
+  CauseView,
   ClaimPair,
   CostRow,
   OrderedRows,
@@ -166,13 +167,10 @@ export type {
   PropRow,
   PropStability,
   PropState,
-  RecomputeTint,
   RowFilters,
   RowOrder,
   SavingsLine,
-  SegmentRow,
   StateChip,
-  TintKind,
 } from "./inspector-model.js";
 export {
   directiveAnnotations,
