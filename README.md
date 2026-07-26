@@ -9,7 +9,7 @@
 Type `e|--0--2--3--|` and get real notation, real sound, and a real MusicXML/MIDI
 file. No note entry. No mouse. No 90s Java applet.
 
-**[▶ Try it live](https://tab-edit.vercel.app)** &nbsp;·&nbsp;
+**[▶ Try it live](https://tabs.gnats.dev)** &nbsp;·&nbsp;
 [Watch the 90-second tour](#-watch-it) &nbsp;·&nbsp;
 [Why this is different](#why-this-is-different) &nbsp;·&nbsp;
 [Run it locally](#run-it-locally)
@@ -143,7 +143,7 @@ cd ../remote/host && npm run dev-server     # ws://localhost:8787
 > **Beta note:** the engine packages (`@tab-edit/parse`, `@tab-edit/ast`,
 > `@tab-edit/plugins`) are private during the closed beta, so `npm install` here needs
 > access to them. The hosted app needs nothing —
-> [just open it](https://tab-edit.vercel.app). Want in?
+> [just open it](https://tabs.gnats.dev). Want in?
 > [Open an issue](../../issues) and say hi.
 
 ### Keyboard
