@@ -5,6 +5,8 @@
 // Compare with demo/ — the demo is the DEV vehicle (engine panes,
 // inspector, activity); this is what users get.
 /// <reference types="vite/client" />
+import { syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 import { lintGutter, lintKeymap } from "@codemirror/lint";
 import { searchKeymap } from "@codemirror/search";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
@@ -82,6 +84,7 @@ const devCursorEl = document.getElementById("dev-cursor") as HTMLElement;
 const devDiagnosticsEl = document.getElementById("dev-diagnostics") as HTMLElement;
 const devDiagCountEl = document.getElementById("dev-diag-count") as HTMLElement;
 const devSnapshotEl = document.getElementById("dev-snapshot") as HTMLElement;
+const devTreeEl = document.getElementById("dev-tree") as HTMLElement;
 
 // Read-only while the music plays (the playhead owns the selection then).
 const editableCompartment = new Compartment();
@@ -261,6 +264,19 @@ async function main(): Promise<void> {
           })
         : [Object.assign(document.createElement("div"), { textContent: "none" })])
     );
+
+    // The BASE tree is CM's own (wiring 2 stores it), so the node chain at the
+    // cursor is free — no engine, no wire round trip. It is the syntax half of
+    // the demo's AST pane; the SEMANTIC tree stays server-side.
+    const chain: string[] = [];
+    for (
+      let n = syntaxTree(state).resolveInner(head, 1) as SyntaxNode | null;
+      n && chain.length < 12;
+      n = n.parent
+    ) {
+      chain.push(`${n.name}  ${n.from}\u2013${n.to}`);
+    }
+    devTreeEl.textContent = chain.length ? chain.join("\n") : "no tree yet";
 
     devSnapshotEl.textContent = [
       `sounds         ${snap.sounds.length}`,
