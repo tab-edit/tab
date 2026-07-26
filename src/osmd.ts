@@ -66,5 +66,38 @@ export function sanitizeForOsmd(
       removed++;
     }
   }
+  // A measure with NO note element at all — not even a rest — makes VexFlow
+  // build a StaveNote from nothing and throw "Invalid note initialization
+  // object: {}", which blanks the entire score. Tom Sawyer's kit hit exactly
+  // this (5 of its 212 measures) once percussion connectors became hits.
+  //
+  // REPAIRED, not dropped: a bar with nothing in it IS a bar of silence, so
+  // saying so in MusicXML keeps the music's timing. Dropping it would shift
+  // everything after it. `divisions` and `time` persist across a part, so
+  // track them the way staff-lines are tracked above.
+  for (const part of [...dom.querySelectorAll("part")]) {
+    let divisions = 1;
+    let beats = 4;
+    let beatType = 4;
+    for (const measure of [...part.querySelectorAll(":scope > measure")]) {
+      const d = measure.querySelector("divisions");
+      if (d) divisions = Number(d.textContent) || divisions;
+      const beatsEl = measure.querySelector("time > beats");
+      const typeEl = measure.querySelector("time > beat-type");
+      if (beatsEl) beats = Number(beatsEl.textContent) || beats;
+      if (typeEl) beatType = Number(typeEl.textContent) || beatType;
+      if (measure.querySelector("note")) continue;
+      const note = dom.createElement("note");
+      const rest = dom.createElement("rest");
+      rest.setAttribute("measure", "yes");
+      const duration = dom.createElement("duration");
+      duration.textContent = String(Math.max(1, Math.round((divisions * 4 * beats) / beatType)));
+      const voice = dom.createElement("voice");
+      voice.textContent = "1";
+      note.append(rest, duration, voice);
+      measure.append(note);
+      removed++;
+    }
+  }
   return { xml: new XMLSerializer().serializeToString(dom), removed };
 }
