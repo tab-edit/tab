@@ -548,6 +548,110 @@ export function cursorAt(
   return i;
 }
 
+/** Caret → playback time: the pure core of "play from HERE" (third
+ *  headless-tested function; the closure below is a thin binding).
+ *
+ *  Containment first — a caret on a fret digit IS that sound. A miss (the
+ *  caret is on a DASH) snaps FORWARD to the next onset, and the whole
+ *  subtlety is what "next" is allowed to mean. Document offsets only order
+ *  by time WITHIN a line: across strings they order line-major, so an
+ *  offset comparison can never reach the note one string down. That is why
+ *  a caret on a silent string, or past the last note of its own line, used
+ *  to answer `undefined` and the app fell back to the top of the score.
+ *
+ *  The tab grid's x axis is the COLUMN, and the sibling set at a moment is
+ *  the caret's MEASURE — which the snapshot already carries as one range
+ *  per line of its system, in score order. So: the next onset at column ≥
+ *  the caret's, anywhere in that measure, else anywhere in a later one.
+ *  Earliest atSec wins rather than smallest column, because time is the
+ *  question being asked (columns misalign in hand-written tab).
+ *
+ *  A caret OUTSIDE the grid — the tuning label, a prose or annotation line
+ *  between systems — falls to the start of the next measure. With no
+ *  measure map at all (snapshot not in yet) it degrades to the old
+ *  line-local scan. `undefined` now means only "nothing left to play". */
+export function secAtPos(
+  events: readonly TimedEvent[],
+  doc: Text,
+  measures: readonly { readonly ranges: readonly Span[] }[],
+  pos: number
+): number | undefined {
+  for (const e of events) {
+    for (const s of e.spans) {
+      // Both ends inclusive so a caret on either edge of a digit counts;
+      // events are atSec-sorted, so an earlier sound wins a shared edge.
+      if (s.from <= pos && pos <= s.to) return e.atSec;
+    }
+  }
+  // Flat [from, to) → measure index, sorted for binary search: one build per
+  // click, then O(log n) per span (full scores run 1,800+ events).
+  const cells: { from: number; to: number; mi: number }[] = [];
+  measures.forEach((m, mi) => {
+    for (const r of m.ranges) cells.push({ from: r.from, to: r.to, mi });
+  });
+  cells.sort((a, b) => a.from - b.from);
+  const cellAt = (off: number): { from: number; to: number; mi: number } | undefined => {
+    let lo = 0;
+    let hi = cells.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (off < cells[mid].from) hi = mid - 1;
+      else if (off >= cells[mid].to) lo = mid + 1;
+      else return cells[mid];
+    }
+    return undefined;
+  };
+  const colOf = (off: number): number => off - doc.lineAt(Math.min(off, doc.length)).from;
+
+  const here = cellAt(pos);
+  let measure: number;
+  let colGate: number;
+  if (here) {
+    measure = here.mi;
+    colGate = colOf(pos);
+  } else {
+    // Off the grid: the next measure to begin, from its own start.
+    const after = cells.find((c) => c.from > pos);
+    if (!after) return lineLocalNext(events, doc, pos);
+    measure = after.mi;
+    colGate = 0;
+  }
+  let best: number | undefined;
+  for (const e of events) {
+    if (best !== undefined && e.atSec >= best) continue;
+    for (const s of e.spans) {
+      const cell = cellAt(s.from);
+      if (!cell) continue;
+      if (cell.mi > measure || (cell.mi === measure && colOf(s.from) >= colGate)) {
+        best = e.atSec;
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+/** The pre-measure-map behavior, kept as the degraded path: next onset on
+ *  the caret's own line. */
+function lineLocalNext(
+  events: readonly TimedEvent[],
+  doc: Text,
+  pos: number
+): number | undefined {
+  const line = doc.lineAt(Math.min(pos, doc.length));
+  let next: number | undefined;
+  let nextFrom = Infinity;
+  for (const e of events) {
+    for (const s of e.spans) {
+      if (s.from > pos && s.from <= line.to && s.from < nextFrom) {
+        nextFrom = s.from;
+        next = e.atSec;
+      }
+    }
+  }
+  return next;
+}
+
 /** How far ahead of the playhead the pump schedules, and how often it runs.
  *  1.2s/250ms is the standard Web Audio lookahead pattern: deep enough that
  *  a busy main thread never gaps the audio, shallow enough that a full song
@@ -692,23 +796,7 @@ export function createPlayer(
       else rebuild(clamped);
     },
     secAt(pos: number): number | undefined {
-      // Containment first (spans are per-line and disjoint between sounds;
-      // both ends inclusive so a caret on either edge of a fret digit
-      // counts, earlier sound winning a shared boundary). A miss — caret
-      // on a dash — snaps FORWARD to the next onset on the same line.
-      const line = doc.lineAt(Math.min(pos, doc.length));
-      let next: number | undefined;
-      let nextFrom = Infinity;
-      for (const e of events) {
-        for (const s of e.spans) {
-          if (s.from <= pos && pos <= s.to) return e.atSec;
-          if (s.from > pos && s.from <= line.to && s.from < nextFrom) {
-            nextFrom = s.from;
-            next = e.atSec;
-          }
-        }
-      }
-      return next;
+      return secAtPos(events, doc, source.snapshot?.measures ?? [], pos);
     },
     progress(): PlaybackProgress {
       const sec = now();
